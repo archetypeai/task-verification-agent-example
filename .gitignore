@@ -1,0 +1,31 @@
+# Secrets — never commit. Contains a live API key.
+.env
+.env.*
+!.env.example
+
+# Design doc — internal, not for publication in this repo.
+docs/Task Verification Agent.md
+
+# The clips in data/clips/ and the generated SOP copies in data/ ARE committed:
+# the recordings were produced internally for this example, so there is no
+# third-party licence to respect and the example is self-contained without a
+# download step. 80 MB total, largest file 11 MB — no LFS needed.
+
+# Run outputs — regenerable, and named per-clip at runtime. Anchored with a
+# leading slash so the curated copies under reference/ stay tracked.
+/tva-output*
+/*.jsonl
+eval_out/
+
+# Raw API responses from discovery scripts — a snapshot of the platform, not source.
+discovery/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+.DS_Store
+
+# Local Claude Code settings
+.claude/settings.local.json

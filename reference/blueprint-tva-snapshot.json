@@ -1,0 +1,174 @@
+{
+  "id": "blp_7xfkarv1ev9z2azhv1e74wfzev",
+  "blueprint_key": "tva",
+  "name": "Task Verification",
+  "description": "Verify that a task was completed correctly against a reference procedure\n",
+  "document": {
+    "blueprint_id": "blp_7xfkarv1ev9z2azhv1e74wfzev",
+    "name": "Task Verification",
+    "description": "Verify that a task was completed correctly against a reference procedure\n",
+    "values": {
+      "max_frames": 16,
+      "max_new_tokens": 8192,
+      "parser_compute_stats": false,
+      "parser_output_frame_indices": true,
+      "preprocessor_batch_size": 64,
+      "preprocessor_batching_delay_ms": 200,
+      "preprocessor_image_mean": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "preprocessor_image_std": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "preprocessor_max_pixels": 25165824,
+      "preprocessor_merge_size": 2,
+      "preprocessor_min_pixels": 4096,
+      "preprocessor_patch_size": 16,
+      "preprocessor_rescale_factor": 0.00392156862745098,
+      "preprocessor_temporal_patch_size": 2,
+      "reader_batch_size": 64,
+      "size": 224
+    },
+    "models": {
+      "fusion": "newton-fusion:1.0",
+      "whisper": "whisper:large-v3"
+    },
+    "artifacts": {
+      "newton-fusion:1.0": "s3://atai-marketplace-model-depot/newton/f1_0_35b_a3b_fp8_base_040625b4d0750b",
+      "whisper:large-v3": "s3://atai-marketplace-model-depot/whisper/large-v3"
+    },
+    "connectors": {
+      "sink": {
+        "key": "RecordsSink",
+        "config": {
+          "format": "json/per-request"
+        }
+      },
+      "source": {
+        "key": "MultiModalSource",
+        "config": {}
+      }
+    },
+    "nodes": {
+      "audio_reader": {
+        "key": "AudioReaderNode",
+        "config": {}
+      },
+      "fusion": {
+        "key": "NewtonFusionModelNode",
+        "config": {
+          "max_new_tokens": "${values.max_new_tokens}",
+          "model": "${models.fusion}"
+        }
+      },
+      "parser": {
+        "key": "TaskVerificationResultsParserNode",
+        "config": {
+          "compute_stats": "${values.parser_compute_stats}",
+          "output_frame_indices": "${values.parser_output_frame_indices}"
+        }
+      },
+      "prepare": {
+        "key": "PrepareSOPNode",
+        "config": {}
+      },
+      "prompt": {
+        "key": "TaskVerificationPromptGeneratorNode",
+        "config": {}
+      },
+      "splitter": {
+        "key": "SplitterNode",
+        "config": {}
+      },
+      "video_preprocessor": {
+        "key": "VideoPreprocessorNode",
+        "config": {
+          "batch_size": "${values.preprocessor_batch_size}",
+          "batching_delay_ms": "${values.preprocessor_batching_delay_ms}",
+          "image_mean": "${values.preprocessor_image_mean}",
+          "image_std": "${values.preprocessor_image_std}",
+          "max_pixels": "${values.preprocessor_max_pixels}",
+          "merge_size": "${values.preprocessor_merge_size}",
+          "min_pixels": "${values.preprocessor_min_pixels}",
+          "patch_size": "${values.preprocessor_patch_size}",
+          "rescale_factor": "${values.preprocessor_rescale_factor}",
+          "temporal_patch_size": "${values.preprocessor_temporal_patch_size}"
+        }
+      },
+      "video_reader": {
+        "key": "VideoReaderNode",
+        "config": {
+          "batch_size": "${values.reader_batch_size}",
+          "max_frames": "${values.max_frames}",
+          "size": "${values.size}"
+        }
+      },
+      "whisper": {
+        "key": "WhisperModelNode",
+        "config": {
+          "model": "${models.whisper}"
+        }
+      }
+    },
+    "graph": {
+      "edges": [
+        {
+          "from": "audio_reader.out",
+          "to": "whisper.in"
+        },
+        {
+          "from": "fusion.out",
+          "to": "parser.in"
+        },
+        {
+          "from": "parser.out",
+          "to": "sink.in"
+        },
+        {
+          "from": "prepare.out",
+          "to": "prompt.instruction"
+        },
+        {
+          "from": "prompt.out",
+          "to": "fusion.in"
+        },
+        {
+          "from": "source.text",
+          "to": "prepare.in"
+        },
+        {
+          "from": "source.video",
+          "to": "splitter.in"
+        },
+        {
+          "from": "splitter.left",
+          "to": "video_reader.in"
+        },
+        {
+          "from": "splitter.right",
+          "to": "audio_reader.in"
+        },
+        {
+          "from": "video_preprocessor.out",
+          "to": "prompt.video"
+        },
+        {
+          "from": "video_reader.out",
+          "to": "video_preprocessor.in"
+        },
+        {
+          "from": "whisper.out",
+          "to": "prompt.audio"
+        }
+      ]
+    }
+  },
+  "yaml_document": "blueprint_id: blp_7xfkarv1ev9z2azhv1e74wfzev\nname: Task Verification\ndescription: >\n  Verify that a task was completed correctly against a reference procedure\n\n# Expose most configurable knobs currently implemented with their defaults. We may\n# or may not want to expose them all in the final blueprint.\nvalues:\n  # Maximum number of tokens the model may generate in the response. `1..=128000`.\n  # Shares the fusion node's context window with the prompt.\n  max_new_tokens: 8192\n\n  # --- VideoReaderNode ---\n  # Number of frames to uniformly sample across the video. `<= 0` keeps every\n  # frame. `-1` is the default the VideoReader node enforces (kept non-default here).\n  max_frames: 16\n  # If set, each frame is resized to a `size x size` square (bilinear). `null`\n  # keeps the source resolution, the default the VideoReader node enforces (kept\n  # non-default here).\n  size: 224\n  # Frames per emitted data message. Must be `>= 1`. Default: 64.\n  reader_batch_size: 64\n\n  # --- VideoPreprocessorNode (all at their defaults) ---\n  # Target number of frames per preprocessor push. Default: 64.\n  preprocessor_batch_size: 64\n  # Max ms to wait for more frames before pushing a partial batch (`0` disables). Default: 200.\n  preprocessor_batching_delay_ms: 200\n  # Spatial patch size in pixels (Qwen3-VL: 16). Default: 16.\n  preprocessor_patch_size: 16\n  # Spatial merge factor (Qwen3-VL: 2). Default: 2.\n  preprocessor_merge_size: 2\n  # Frames grouped along the temporal axis per token row (Qwen3-VL: 2). Default: 2.\n  preprocessor_temporal_patch_size: 2\n  # Per-channel mean subtracted after rescaling. Default: [0.5, 0.5, 0.5].\n  preprocessor_image_mean: [0.5, 0.5, 0.5]\n  # Per-channel std divided after mean subtraction. Default: [0.5, 0.5, 0.5].\n  preprocessor_image_std: [0.5, 0.5, 0.5]\n  # Rescale factor applied to raw u8 pixels before normalize (1/255). Default: 0.00392156862745098.\n  preprocessor_rescale_factor: 0.00392156862745098\n  # Lower bound on the spatiotemporal token volume. Default: 4096.\n  preprocessor_min_pixels: 4096\n  # Upper bound on the spatiotemporal token volume. Default: 25165824.\n  preprocessor_max_pixels: 25165824\n\n  # --- TaskVerificationResultsParserNode ---\n  # Attach template-conformance stats under `result_parser_stats`. Default: false.\n  parser_compute_stats: false\n  # Emit the `frame_start`/`frame_end` columns. Default: true.\n  parser_output_frame_indices: true\n\n# Logical model names used by the model-bearing nodes. Deployments map these\n# resolved names to checkpoint directories through `artifacts` or runtime config.\nmodels:\n  fusion: \"newton-fusion:1.0\"\n  whisper: \"whisper:large-v3\"\n\nconnectors:\n  source:\n    key: MultiModalSource\n\n  sink:\n    key: RecordsSink\n    config:\n      format: json/per-request\n\nnodes:\n  # Accumulates the SOP step lines into a single prepared-instruction string.\n  # (PrepareSOPNode has no configurable knobs.)\n  prepare:\n    key: PrepareSOPNode\n\n  splitter:\n    key: SplitterNode\n\n  # Decodes the referenced video into RGB frames. Requires the `opencv` feature.\n  video_reader:\n    key: VideoReaderNode\n    config:\n      max_frames: ${values.max_frames}\n      size: ${values.size}\n      batch_size: ${values.reader_batch_size}\n\n  video_preprocessor:\n    key: VideoPreprocessorNode\n    config:\n      batch_size: ${values.preprocessor_batch_size}\n      batching_delay_ms: ${values.preprocessor_batching_delay_ms}\n      patch_size: ${values.preprocessor_patch_size}\n      merge_size: ${values.preprocessor_merge_size}\n      temporal_patch_size: ${values.preprocessor_temporal_patch_size}\n      image_mean: ${values.preprocessor_image_mean}\n      image_std: ${values.preprocessor_image_std}\n      rescale_factor: ${values.preprocessor_rescale_factor}\n      min_pixels: ${values.preprocessor_min_pixels}\n      max_pixels: ${values.preprocessor_max_pixels}\n\n  # Decodes the referenced video's audio track into a raw waveform. Requires the\n  # `ffmpeg` feature.\n  audio_reader:\n    key: AudioReaderNode\n\n  whisper:\n    key: WhisperModelNode\n    config:\n      model: ${models.whisper}\n\n  prompt:\n    key: TaskVerificationPromptGeneratorNode\n\n  fusion:\n    key: NewtonFusionModelNode\n    config:\n      model: ${models.fusion}\n      max_new_tokens: ${values.max_new_tokens}\n\n  parser:\n    key: TaskVerificationResultsParserNode\n    config:\n      compute_stats: ${values.parser_compute_stats}\n      output_frame_indices: ${values.parser_output_frame_indices}\n\ngraph:\n  edges:\n    # The SOP text is turned into an instruction, then written by the text sink.\n    - { from: source.text, to: prepare.in }\n    # The video \"url\" is sent in parallel for frame extraction and audio transcription.\n    - { from: source.video, to: splitter.in }\n    - { from: splitter.left, to: video_reader.in }\n    - { from: splitter.right, to: audio_reader.in }\n\n    # Output of the frame extraction is pre-processed.\n    - { from: video_reader.out, to: video_preprocessor.in }\n    # Output of the audio extraction is transcribed.\n    - { from: audio_reader.out, to: whisper.in }\n\n    # All \"prepared inputs\" are gathered into the prompt generation\n    - { from: prepare.out, to: prompt.instruction }\n    - { from: video_preprocessor.out, to: prompt.video }\n    - { from: whisper.out, to: prompt.audio }\n\n    # The prompt is sent to the fusion mode, the result parsed, and sent to the sink\n    - { from: prompt.out, to: fusion.in }\n    - { from: fusion.out, to: parser.in }\n    - { from: parser.out, to: sink.in }\n\nartifacts:\n  \"newton-fusion:1.0\": \"s3://atai-marketplace-model-depot/newton/f1_0_35b_a3b_fp8_base_040625b4d0750b\"\n  \"whisper:large-v3\": \"s3://atai-marketplace-model-depot/whisper/large-v3\"\n",
+  "is_canonical": true,
+  "is_active": true,
+  "created_at": "2026-08-11T22:01:18.994690Z"
+}
