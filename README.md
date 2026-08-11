@@ -122,6 +122,15 @@ python3 sweep.py --all              # one bundle, all 12 clips, sequential (~2.6
 python3 evaluate.py eval_out/*.jsonl
 ```
 
+A sweep is hours long on a shared GPU, so two commands matter as much as the sweep
+itself. **The runs live on the platform, not in your client** — see
+[If the client dies, the runs do not](#if-the-client-dies-the-runs-do-not):
+
+```sh
+python3 sweep.py --collect          # harvest finished runs after a disconnect
+python3 sweep.py --cancel-all       # stop what you are not waiting for
+```
+
 Every script here is **stdlib-only**: no virtualenv, no `requirements.txt`, no
 install step. Three of the four commands above touch no API at all, and scoring
 never does:
@@ -499,7 +508,43 @@ per-step ground-truth spans in these filenames. Intervals are printed and sanity
 checked (end-before-start, zero-length), never scored. **Read the absence of an
 IoU column as "unmeasured", not as "localises perfectly".**
 
-<!-- RESULTS -->
+### Results so far — one clip, and an honest gap
+
+**This section is deliberately incomplete.** A 12-clip sweep is running; until it
+lands, the only successful runs are on the all-pass clip:
+
+```
+clip                                    step 1           step 2           step 3
+1_pass_2_pass_3_pass_A               PASS>PASSED OK   PASS>PASSED OK   PASS>PASSED OK
+overall step accuracy: 3/3 (100.0%)
+```
+
+with reasons that cite what is on screen:
+
+```
+step 1  PASSED  [  2.0 -   9.0s]  The video clearly shows the person picking up the blue
+                                  cap and O-ring, then installing the O-ring onto the cap.
+step 2  PASSED  [  9.0 -  20.0s]  The person picks up the manifold and threads the blue
+                                  cap onto it by hand until it is snug.
+step 3  PASSED  [ 20.0 -  27.0s]  The person uses a wrench to tighten the blue cap.
+```
+
+**Do not read that as 100% accuracy.** Three PASSED verdicts on a clip where
+everything was done correctly is exactly what a model that always answers PASSED
+would produce. The number that matters is on the failure clips, and it is not in
+yet — the one attempt so far returned nothing at all, because `max_new_tokens:
+2048` was exhausted inside the reasoning block.
+
+What the passing run *does* establish, which is not nothing:
+
+- the SOP reached the model and was segmented into three steps
+- the verdicts are per-step, timestamped, and carry reasons grounded in the video
+  (the *"blue cap"* was never mentioned in the SOP)
+- generation is deterministic, byte-for-byte across two orgs
+
+When the sweep completes, this section gets the full table: per-step accuracy,
+the confusion matrix, and the FAILED-vs-MISSING split on the six clips where a
+step was skipped.
 
 ## Platform behavior worth knowing
 
@@ -603,7 +648,7 @@ Observations for the author, not defects.
 |---|---|
 | `run_tva_example.py` | **Start here.** Single-clip end-to-end run: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--dry-run` and `--show` need no key. |
 | `sop/oring.txt` | The SOP, one step per line. Edit this to change the procedure — no Python involved. |
-| `sweep.py` | Batch path: runs several clips sequentially, keeps going on failure, cancels the in-flight run if interrupted. `--list` is offline. |
+| `sweep.py` | Batch path over many clips, reusing one bundle. Sequential by default so a misconfiguration costs one run, not twelve; `--submit-all` instead claims every queue slot up front. `--collect` harvests finished runs after a disconnect and `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
 | `tva_api.py` | Shared stdlib client (streaming upload, retries, `/logs` polling, wired-value preflight). |
 | `reference/` | Committed run outputs and a blueprint snapshot, so every number here is checkable offline with no API key. Includes the 44-byte empty result from the `max_new_tokens: 2048` overflow, kept as evidence because it is the failure worth recognising. |
