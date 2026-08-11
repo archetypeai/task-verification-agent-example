@@ -51,6 +51,66 @@ def label_str(clip: str) -> str:
     return "/".join(f"{k}={'pass' if v else 'FAIL'}" for k, v in sorted(truth.items()))
 
 
+def submit_all(args, bundle_id: str, sop_id: str, clips: list[str]) -> None:
+    """Submit every run before collecting any, then poll them in order.
+
+    Sequential submission leaves the GPU unclaimed between clips, and dev is
+    shared across orgs — a job you cannot see can take the slot, which is the most
+    likely explanation for an 11-minute gap observed between `job.admitted` and a
+    pod starting. Submitting up front holds the positions.
+
+    It buys queue position, NOT parallelism: the runs still execute one at a time.
+    And it removes the safety property of the sequential path, where a
+    misconfiguration costs one run rather than all of them — so the sequential
+    path stays the default.
+    """
+    pending = []
+    for i, path in enumerate(clips, 1):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        out_path = os.path.join(args.out_dir, f"tva-output-{stem}.jsonl")
+        if os.path.exists(out_path):
+            print(f"[{i}/{len(clips)}] {stem} — already have {out_path}, skipping")
+            continue
+        video_id = api.upload_file(path)
+        agent_id = api.run(bundle_id, video_id, sop_id)
+        print(f"[{i}/{len(clips)}] submitted {stem:<32s} {agent_id}")
+        pending.append((stem, agent_id, out_path))
+
+    print(f"\n{len(pending)} run(s) queued. They still execute ONE AT A TIME; "
+          f"collecting in submission order.\n"
+          f"Interrupting now leaves them running — cancel with:\n"
+          f"  python3 sweep.py --cancel-all\n")
+    log = []
+    for stem, agent_id, out_path in pending:
+        t0 = time.time()
+        verdict = api.poll_logs(agent_id, quiet=True)
+        payload = api.fetch_results(agent_id, out_path)
+        n = 0
+        if payload:
+            recs = [json.loads(l) for l in payload.decode(errors="replace").splitlines() if l.strip()]
+            n = sum(len(r.get("results", [])) for r in recs)
+        print(f"  {stem:<32s} {verdict} in {time.time() - t0:.0f}s — {n} step(s), "
+              f"{len(payload or b'')} bytes")
+        log.append({"clip": stem, "agent_id": agent_id, "verdict": verdict,
+                    "steps": n})
+    with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as fh:
+        json.dump(log, fh, indent=2)
+    print(f"\nscore it:  python3 evaluate.py {args.out_dir}/*.jsonl")
+
+
+def cancel_all() -> None:
+    """Cancel every non-terminal run in the org. The escape hatch for --submit-all."""
+    instances = api.request("GET", f"{api.agents_base()}/instances?limit=100")
+    live = [x for x in instances.get("data", [])
+            if x.get("status") not in ("completed", "failed", "canceled")]
+    if not live:
+        print("no non-terminal runs")
+        return
+    for x in live:
+        api.cancel(x["id"])
+        print(f"cancelled {x['id']} ({x.get('status')})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--clips", nargs="+",
@@ -71,12 +131,28 @@ def main() -> None:
                          "skipped step exhausted the budget inside the model's "
                          "<think> block and returned results:[] — see the README.")
     ap.add_argument("--out-dir", default=OUT_DIR)
+    ap.add_argument("--submit-all", action="store_true",
+                    help="submit every run UP FRONT, then collect results, "
+                         "instead of waiting for each before starting the next. "
+                         "Does not make the GPU faster — dev serializes — but it "
+                         "holds your place in the queue so another org's job "
+                         "cannot slip in between your clips. The cost: a "
+                         "misconfiguration burns every run instead of the first, "
+                         "and this example has hit two such failures already.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan — bundle values, clips, which are "
                          "already done, estimated time — and stop. No API calls.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"SOP steps, one per line (default: {DEFAULT_SOP_PATH})")
+    ap.add_argument("--cancel-all", action="store_true",
+                    help="cancel every non-terminal run in the org and stop. The "
+                         "escape hatch after --submit-all, since an abandoned run "
+                         "blocks the shared GPU.")
     args = ap.parse_args()
+
+    if args.cancel_all:
+        cancel_all()
+        return
 
     available = sorted(glob.glob(os.path.join(args.dir, "*.mp4")))
     if args.list:
@@ -179,6 +255,10 @@ def main() -> None:
     bundle = api.create_bundle(args.blueprint, f"TVA sweep ({len(clips)} clips)",
                                values)
     print(f"bundle {bundle['id']} (reused for all {len(clips)} runs)\n")
+    if args.submit_all:
+        submit_all(args, bundle["id"], sop_id, clips)
+        return
+
     log = []
     for i, path in enumerate(clips, 1):
         stem = os.path.splitext(os.path.basename(path))[0]
