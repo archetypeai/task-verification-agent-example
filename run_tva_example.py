@@ -193,8 +193,16 @@ def show(path: str, video: str | None = None) -> None:
         print(f"\nverification report for {rid} — {len(results)} of "
               f"{len(load_sop()) if os.path.exists(DEFAULT_SOP_PATH) else len(results)} SOP steps reported")
         if not results:
-            print("  NO STEPS PARSED. The run completed and produced an empty "
-                  "results list.")
+            print("  NO STEPS PARSED — the run reported job.completed and "
+                  "returned an empty results list.\n"
+                  "  The usual cause is the token budget being spent inside the "
+                  "model's <think>\n"
+                  "  reasoning block, so no verdicts were ever emitted. Check "
+                  "/logs for\n"
+                  "  'generation ended inside the model's reasoning block' and "
+                  "raise --max-new-tokens.\n"
+                  "  Clips where a step was SKIPPED need a bigger budget than "
+                  "clean ones.")
         for r in results:
             # MISSING rows carry no timestamps, by design — there is no interval
             # to point at when the step never happened.
@@ -213,8 +221,11 @@ def show(path: str, video: str | None = None) -> None:
                 status = got.get("status") if got else "NOT REPORTED"
                 # PASSED is the only status that means "done correctly". FAILED
                 # and MISSING are different observations but the same verdict.
+                # A step with no row is a missing answer, not a correct FAIL —
+                # see evaluate.py. Never scored as correct.
                 predicted_pass = status == "PASSED"
-                ok = "OK  " if predicted_pass == expected else "MISS"
+                ok = "OK  " if got is not None and predicted_pass == expected \
+                    else "MISS"
                 print(f"    step {step}: expected "
                       f"{'PASS' if expected else 'FAIL':4}  got {str(status):8} "
                       f"[{ok}]")
@@ -254,12 +265,14 @@ def main() -> None:
                          "frame every 1.9 s. 64 is also the reader and "
                          "preprocessor batch size, so they land in one batch. "
                          "(default: 64)")
-    ap.add_argument("--max-new-tokens", type=int, default=2048,
-                    help="output budget (default 2048). Sent EXPLICITLY on "
-                         "purpose: the blueprint's own default changed from 2048 "
-                         "to 8192 mid-session, and a run that relies on the "
-                         "default silently changes behaviour when that happens. "
-                         "Three steps with reasons fit in 2048 easily.")
+    ap.add_argument("--max-new-tokens", type=int, default=8192,
+                    help="output budget (default 8192). NOT cosmetic: f1-0 emits "
+                         "a <think> reasoning block first, and at 2048 a clip "
+                         "with a SKIPPED step ran out of budget inside that "
+                         "block, so the parser dropped everything and the run "
+                         "returned results:[] while reporting job.completed. "
+                         "Clean all-pass clips fit in 2048; the interesting ones "
+                         "do not. 8192 is also the current blueprint default.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"text file of SOP steps, one per line "
                          f"(default: {DEFAULT_SOP_PATH}). The SOP is the ONLY "
@@ -363,8 +376,8 @@ def main() -> None:
         print(f"  saved {out_path} ({len(payload)} bytes, "
               f"md5 {hashlib.md5(payload).hexdigest()})")
         show(out_path, video=args.video)
-    if verdict == "failed":
-        sys.exit(f"run failed — full log: "
+    if verdict != "completed":
+        sys.exit(f"run {verdict} — full log: "
                  f"{api.agents_base()}/instances/{agent_id}/logs")
 
 

@@ -28,13 +28,12 @@ import glob
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 
 import tva_api as api
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
-                            parse_ground_truth, sop_text, upload_sop)
+                            parse_ground_truth, upload_sop)
 
 OUT_DIR = "eval_out"
 
@@ -56,7 +55,10 @@ def main() -> None:
                          f"The key 'tva' currently resolves to a blueprint whose "
                          f"sink cannot be instantiated — see the README.")
     ap.add_argument("--max-frames", type=int, default=64)
-    ap.add_argument("--max-new-tokens", type=int, default=2048)
+    ap.add_argument("--max-new-tokens", type=int, default=8192,
+                    help="output budget (default 8192). At 2048 a clip with a "
+                         "skipped step exhausted the budget inside the model's "
+                         "<think> block and returned results:[] — see the README.")
     ap.add_argument("--out-dir", default=OUT_DIR)
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"SOP steps, one per line (default: {DEFAULT_SOP_PATH})")

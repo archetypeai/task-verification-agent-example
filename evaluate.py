@@ -89,9 +89,11 @@ def load(paths: list[str]) -> list[tuple[str, dict]]:
 def by_step(rec: dict) -> dict[int, dict]:
     """{step_number: row}, normalising the parser's step numbering to 1-based.
 
-    The design doc says `step: <int>` and does not say where it starts. This
-    parser is 1-based; MGA's is 0-based. Detect it rather than assume, because
-    an off-by-one produces plausible wrong alignments instead of an error.
+    The design doc says `step: <int>` and does not say where it starts. It is
+    0-based — verified on real runs, and the same as MGA's parser. Detected here
+    rather than assumed, because an off-by-one produces plausible wrong
+    alignments instead of an error: a perfect 3-step run misreads as two hits
+    and a missing third step.
     """
     rows = rec.get("results", []) or []
     nums = [r.get("step") for r in rows if r.get("step") is not None]
@@ -142,13 +144,22 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
             # PASSED is the only status meaning "done correctly"; FAILED and
             # MISSING are the same verdict from different observations.
             predicted = status == "PASSED"
-            ok = predicted == expected
+            # A step the run never reported is NOT a correct FAIL detection. It is
+            # a missing answer, and crediting it would score an empty output as
+            # 100% on every fail-labelled clip — which is exactly what an
+            # exhausted reasoning budget produces. Never correct.
+            ok = (row is not None) and (predicted == expected)
             correct += ok
             total += 1
             per_step[step][0] += ok
             per_step[step][1] += 1
 
             c = confusion[step]
+            if row is None:
+                # Outside the confusion matrix entirely: no verdict was given, so
+                # it is neither a true nor a false anything.
+                cells.append(f"{'PASS' if expected else 'FAIL'}>none  !!")
+                continue
             if expected and predicted:
                 c["TP"] += 1
             elif not expected and not predicted:

@@ -320,8 +320,21 @@ def poll_logs(agent_id: str, timeout_s: int = 3600, interval_s: int = 20,
                       f"{str(r.get('level')):7} {str(r.get('event_type')):28} "
                       f"{r.get('message')}")
         if rows and str(rows[-1].get("event_type")) in TERMINAL_EVENTS:
-            failed = any(str(r.get("level")) == "ERROR" for r in rows)
-            return "failed" if failed else "completed"
+            if any(str(r.get("level")) == "ERROR" for r in rows):
+                return "failed"
+            # A WARN from the parser is not cosmetic: "generation ended inside the
+            # model's reasoning block (no </think>)" means the whole token budget
+            # went on reasoning and NO verdicts were emitted. The job still
+            # reports completed and /results still returns a record — with an
+            # empty results list. Report it as its own outcome so a caller cannot
+            # mistake it for a successful run.
+            for r in rows:
+                msg = str(r.get("message", ""))
+                if str(r.get("level")) == "WARN" and "reasoning block" in msg:
+                    if not quiet:
+                        print(f"  PARSER WARNING: {msg}")
+                    return "empty-reasoning-overflow"
+            return "completed"
         time.sleep(interval_s)
     return "timeout"
 
