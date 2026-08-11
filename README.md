@@ -320,23 +320,71 @@ Only two values are worth setting, and both are honoured:
 
 | Value | This example sends | Honoured? | Notes |
 |---|---|---|---|
-| `max_frames` | **64** | ✅ | Blueprint default is **16** — on a 30 s clip that is one frame every 1.9 s. 64 is also the reader/preprocessor batch size, so frames land in one batch. |
-| `max_new_tokens` | **2048** | ✅ | Three steps with reasons fit easily. |
+| `max_frames` | **64** | ✅ | Blueprint default is 16 — on a 30 s clip that is one frame every 1.9 s. 64 is also the reader/preprocessor batch size, so frames land in one batch. |
+| `max_new_tokens` | **8192** | ✅ | **Not cosmetic — see below.** At 2048 the clips that matter return nothing at all. |
 | `size` | not sent (224) | ✅ | Every frame is resized to 224×224, so 1080p clips are no better than 480p — only slower to upload. |
 | `prompt` | **does not exist** | — | Not a defect to work around, just absent. The SOP replaces it. |
 
 The preflight reads the blueprint document rather than hardcoding key names, so a
-value that is not wired is caught **before** spending GPU:
+value that is not wired is caught before spending GPU:
 
 ```
   max_frames       64       -> honoured   (blueprint default: 16)
-  max_new_tokens   2048     -> honoured   (blueprint default: 8192)
+  max_new_tokens   8192     -> honoured   (blueprint default: 8192)
 ```
 
-**Set these explicitly even when the defaults look fine.** The blueprint's own
-`max_new_tokens` default changed from 2048 to 8192 *during this session* (see
-below). Runs that send the value explicitly were unaffected; runs relying on the
-default silently changed behaviour.
+### `max_new_tokens` is the one value that decides whether you get an answer
+
+f1-0 emits a `<think>` reasoning block before its verdicts, and **that block shares
+the output budget.** If the budget runs out inside it, the parser has nothing to
+parse and the run returns an empty result:
+
+```
+23:02:32  WARN     parser.running   TaskVerificationResultsParserNode: generation ended inside
+                                    the model's reasoning block (no `</think>`), so it never
+                                    produced an answer; dropping 0 rehearsed row(s).
+                                    Raise `max_new_tokens` if the reasoning was truncated.
+23:02:32  INFO     completed        Agent execution terminated successfully
+23:02:35  SUCCESS  job.completed    Job completed in 814s
+```
+
+Note what that run reported: **`job.completed`, no ERROR row, and
+`{"id":"1_pass_2_pass_3_fail_A","results":[]}`** — 44 bytes. A caller checking the
+job verdict concludes success.
+
+**The budget needed depends on the answer, and the hard cases need more.** At
+`max_new_tokens: 2048`:
+
+| clip | outcome at 2048 |
+|---|---|
+| `1_pass_2_pass_3_pass_A` — everything done correctly | **3 of 3 verdicts**, 678 bytes |
+| `1_pass_2_pass_3_fail_A` — step 3 skipped | **empty**, budget spent inside `<think>` |
+
+So the clean clip succeeds and **the clip you actually care about silently returns
+nothing.** For a verification agent that is the worst possible failure shape: it
+fails only on the inputs that contain a defect. Any accuracy figure gathered
+without checking for this is measuring the easy half of the set.
+
+This repo therefore sends **8192**, and treats the overflow as its own outcome
+rather than as success — `poll_logs()` returns `empty-reasoning-overflow`,
+`run_tva_example.py` exits non-zero, and `--show` on an empty file names the cause
+and the fix.
+
+### Set values explicitly — but know that pinning has a cost too
+
+The blueprint's own `max_new_tokens` default changed from **2048 to 8192 during
+this session**. Both halves of the usual advice failed here:
+
+- **Relying on the default** means your runs change behaviour when someone
+  republishes the blueprint, with nothing in your code or output to say so.
+- **Pinning a value** froze this example at 2048 — the old default — which is
+  exactly the value that produces empty results. The upstream bump to 8192 was
+  almost certainly the fix for this overflow, and pinning opted out of it.
+
+The lesson is not "pin" or "don't pin". It is that **neither protects you, and the
+only thing that caught this was reading the log.** Hence the preflight printing
+every value next to the blueprint's current default, so a divergence is visible
+before the run rather than inferred afterwards.
 
 ## Stage 4 — Run
 
@@ -426,6 +474,14 @@ IoU column as "unmeasured", not as "localises perfectly".**
 - **Values are accepted whether or not they do anything.** A key absent from the
   blueprint's `values`, or present but never referenced as `${values.<key>}`, is
   stored on the bundle and silently ignored.
+- **A run can report `job.completed` and return nothing.** `max_new_tokens: 2048`
+  on a clip with a skipped step produced `{"id":…,"results":[]}` — 44 bytes, no
+  ERROR row, only a WARN. **Count the verdicts; neither the status nor the exit
+  code distinguishes it from success.** Committed as
+  [`reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl`](reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl).
+- **The reasoning block shares the output budget**, so the tokens a run needs
+  depend on how hard the judgement is — and the clips containing a defect need
+  more than the clean ones.
 - **No progress events during processing.** Between `input_started` and the
   terminal event there is nothing — no frame count, no transcript length, no
   per-node timing.
@@ -453,6 +509,34 @@ Observations for the author, not defects.
 - **The model is fp8** — `f1_0_35b_a3b_fp8_base_040625b4d0750b`, confirming the
   35B/3B-active MoE description and adding quantization the doc does not mention.
 
+## Recommendations
+
+1. **Fix the sink format on the canonical `tva` blueprint** — `json/per-request`
+   has no registered connector, so the blueprint that ships cannot emit output.
+   Highest priority: it makes the agent unusable via its own key.
+2. **Validate the graph before loading models, not after.** A blueprint that
+   cannot instantiate currently costs the full ~7-minute cold start; connector and
+   node-config validation up front turns 996 s into about 1 s.
+3. **Treat an empty `results` list as a failure, not a completed job.** The parser
+   already emits a WARN naming the cause; promoting it to ERROR, or surfacing a
+   `rows_emitted: 0` field, would stop a silent empty result reading as success.
+   This matters more for TVA than for MGA because the overflow correlates with the
+   inputs that contain defects.
+4. **Consider a separate reasoning budget, or reserving tokens for the answer.**
+   Sharing one budget between `<think>` and the verdicts means a harder judgement
+   can cost you the answer entirely. Reserving enough for N rows would fail
+   gracefully — truncated reasoning, verdicts intact.
+5. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section
+   is the temporal compression algorithm, with a documented 70% compression and
+   25% performance gain, and none of it is reachable from a bundle.
+6. **Document that `step` is 0-based** in the output schema. Human-authored SOPs
+   are 1-based, and the mismatch fails quietly.
+7. **Emit progress events during processing.** Between `input_started` and the
+   terminal event there is nothing across 5–6 minutes, so neither a failure nor
+   the time spent can be attributed.
+8. **Reconsider loading whisper when the video has no audio track.** It costs ~40 s
+   of every run here and contributes nothing.
+
 ## Repo layout
 
 | Path | What it is |
@@ -462,7 +546,7 @@ Observations for the author, not defects.
 | `sweep.py` | Batch path: runs several clips sequentially, keeps going on failure, cancels the in-flight run if interrupted. `--list` is offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
 | `tva_api.py` | Shared stdlib client (streaming upload, retries, `/logs` polling, wired-value preflight). |
-| `reference/` | Committed run outputs and a blueprint snapshot, so the numbers are checkable offline. |
+| `reference/` | Committed run outputs and a blueprint snapshot, so every number here is checkable offline with no API key. Includes the 44-byte empty result from the `max_new_tokens: 2048` overflow, kept as evidence because it is the failure worth recognising. |
 | `docs/` | The TVA design doc this example implements (gitignored — internal). |
 
 ## Not yet built
