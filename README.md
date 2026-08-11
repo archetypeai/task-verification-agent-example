@@ -311,6 +311,21 @@ So one bundle is reusable across every SOP, and **`MultiModalSource` routes the 
 inputs by their `format` field, not by position** — order does not matter. Looking
 for the SOP in the bundle and not finding it is the expected first confusion here.
 
+**This is worth exploiting, not just knowing.** Because nothing that varies per
+clip lives in the bundle, `sweep.py` creates **one bundle and reuses it for every
+run**:
+
+```
+SOP uploaded as oring.txt
+bundle bnd_2rr5jj… (reused for all 12 runs)
+
+[1/12] 1_fail_2_pass_3_fail_A  (1=FAIL/2=pass/3=FAIL)
+```
+
+An earlier version created a bundle per clip — twelve identical bundles differing
+in nothing but their id. If you find yourself creating a bundle per input, that is
+a sign you have put something in `values` that belongs in a connector.
+
 ## Stage 3 — Configure
 
 ```sh
@@ -475,7 +490,12 @@ IoU column as "unmeasured", not as "localises perfectly".**
   "dispatched to JOS".
 - **The instance `status` field is not a terminality signal** — judge from the log
   stream. (MGA saw `running` persist 20+ minutes after a pod died with exit=1.)
-- **`job.admitted`'s queue figure is not the real wait** — see Stage 4.
+- **`job.admitted`'s queue figure is not the real wait, and the real wait can be
+  invisible.** One run reported `Job scheduled after 32s in queue` and then did
+  not start a pod for **11+ minutes**, with no job of ours holding the GPU and the
+  instance `status` reading `running` throughout. `GET /agents/instances` is
+  scoped to your org, so a job from another org can block you with nothing in your
+  view to explain it. Judge progress from `job.started` and expect blind spots.
 - **Values are accepted whether or not they do anything.** A key absent from the
   blueprint's `values`, or present but never referenced as `${values.<key>}`, is
   stored on the bundle and silently ignored.

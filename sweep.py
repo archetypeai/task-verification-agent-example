@@ -136,7 +136,22 @@ def main() -> None:
     # One upload for the whole sweep: every clip is checked against the SAME
     # procedure, so the SOP is uploaded once and its file_id reused.
     sop_id = upload_sop(args.sop, steps)
-    print(f"SOP uploaded as {sop_id}\n")
+    print(f"SOP uploaded as {sop_id}")
+
+    # ONE bundle for the whole sweep, reused by every run.
+    #
+    # A bundle carries only `values`, and they are identical for every clip here.
+    # The two things that vary per run — the video and the SOP — are both source
+    # connector inputs, supplied at run time. So there is nothing a per-clip
+    # bundle could hold that differs, and creating twelve identical bundles just
+    # to launch twelve runs is noise in the console and twelve extra API calls.
+    #
+    # This is the same property the README's Stage 2 describes from the other
+    # direction: because the SOP travels with the run rather than the bundle, one
+    # bundle serves every SOP — and a fortiori every clip under one SOP.
+    bundle = api.create_bundle(args.blueprint, f"TVA sweep ({len(clips)} clips)",
+                               values)
+    print(f"bundle {bundle['id']} (reused for all {len(clips)} runs)\n")
     log = []
     for i, path in enumerate(clips, 1):
         stem = os.path.splitext(os.path.basename(path))[0]
@@ -150,7 +165,6 @@ def main() -> None:
         agent_id = None
         try:
             video_id = api.upload_file(path)
-            bundle = api.create_bundle(args.blueprint, f"TVA sweep {stem}", values)
             agent_id = api.run(bundle["id"], video_id, sop_id)
             print(f"  agent_id={agent_id}")
             verdict = api.poll_logs(agent_id, quiet=True)
