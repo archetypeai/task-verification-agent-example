@@ -71,6 +71,9 @@ def main() -> None:
                          "skipped step exhausted the budget inside the model's "
                          "<think> block and returned results:[] — see the README.")
     ap.add_argument("--out-dir", default=OUT_DIR)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the plan — bundle values, clips, which are "
+                         "already done, estimated time — and stop. No API calls.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"SOP steps, one per line (default: {DEFAULT_SOP_PATH})")
     args = ap.parse_args()
@@ -116,9 +119,33 @@ def main() -> None:
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
-    os.makedirs(args.out_dir, exist_ok=True)
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens}
 
+    if args.dry_run:
+        # Resuming matters here: a sweep is hours long and gets interrupted, so
+        # show what would be skipped rather than making the caller guess.
+        todo, done = [], []
+        for path in clips:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            out = os.path.join(args.out_dir, f"tva-output-{stem}.jsonl")
+            (done if os.path.exists(out) else todo).append(stem)
+        print(f"blueprint  {args.blueprint}")
+        print(f"values     {json.dumps(values)}")
+        print(f"SOP        {args.sop} ({len(steps)} steps), uploaded as "
+              f"{os.path.basename(args.sop)}")
+        print(f"bundle     ONE, reused for all runs")
+        print(f"outputs    {args.out_dir}/tva-output-<clip>.jsonl")
+        if done:
+            print(f"\nalready done, would be SKIPPED ({len(done)}):")
+            for stem in done:
+                print(f"  {stem:<32s} {label_str(stem)}")
+        print(f"\nwould run ({len(todo)}), sequentially, ~13 min each "
+              f"-> ~{len(todo) * 13} min (~{len(todo) * 13 / 60:.1f} h):")
+        for i, stem in enumerate(todo, 1):
+            print(f"  {i:2}. {stem:<32s} {label_str(stem)}")
+        return
+
+    os.makedirs(args.out_dir, exist_ok=True)
     bp = api.get_blueprint(args.blueprint)
     inert = api.inert_values(bp["document"], values)
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")

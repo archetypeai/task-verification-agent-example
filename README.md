@@ -410,7 +410,12 @@ python3 run_tva_example.py                    # one clip, the default
 # several clips, run one at a time. Stems are SPACE-separated, from --list.
 python3 sweep.py --clips 1_pass_2_pass_3_fail_A 1_fail_2_pass_3_pass_A
 
-python3 sweep.py --all                        # all twelve (2.5-3 hours)
+python3 sweep.py --all --dry-run              # the plan, no API calls
+python3 sweep.py --all                        # all twelve, ~2.6 hours
+
+# --all reuses ONE bundle and skips clips already in eval_out/, so an
+# interrupted sweep resumes rather than restarting. Ctrl-C cancels the
+# in-flight run instead of orphaning it on the shared GPU.
 ```
 
 Timings from real runs, and they are dominated by cold start:
