@@ -286,9 +286,10 @@ is your entire influence over the model.** Three choices in the wording above:
 | **Named colours** ("blue cap", "black manifold") | The bench holds a blue anodized cap and a black manifold with other blue and black fittings beside them, so "the cap" is genuinely ambiguous at 224×224. Insurance, not a fix: the model already said *"the blue cap"* unprompted. |
 | **Behavioural, not numeric** | The SOP says "tighten to the specified torque", not "to 12 Nm". Nothing in a 30-second handheld video can evidence a number, so asking for one invites a guess. |
 
-The SOP is uploaded per run as `sop_<clip>.txt`, so **the exact procedure used for
-any past run stays recoverable from the platform** — reproducibility you would
-otherwise lose.
+`sop/oring.txt` is uploaded **as itself** — same bytes, same name (`oring.txt`),
+no generated copy — so the file you edit, the file on the platform and the text the
+model sees cannot drift apart. Provenance for past runs comes from git, where the
+SOP is committed, rather than from the platform's file list.
 
 ### Where the SOP lives on the wire — and where it does not
 

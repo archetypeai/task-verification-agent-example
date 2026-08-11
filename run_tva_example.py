@@ -129,6 +129,42 @@ def sop_text(steps: list[str]) -> str:
     return "\n".join(s.strip() for s in steps) + "\n"
 
 
+def upload_sop(sop_path: str, steps: list[str]) -> str:
+    """Upload the SOP and return its file_id (which is its basename).
+
+    Normally this uploads sop/oring.txt ITSELF — no generated copy, so the file
+    on disk, the file on the platform and the text the model sees are the same
+    bytes under the same name.
+
+    load_sop() drops blank lines and # comments, so a file using either would
+    differ from what the model should see. Only then is a normalized copy written
+    (to data/) and uploaded instead, and it says so rather than doing it quietly.
+    """
+    normalized = sop_text(steps)
+    if open(sop_path).read() == normalized:
+        return api.upload_file(sop_path)
+    print(f"  note: {sop_path} has blank/comment lines; uploading a normalized "
+          f"copy of its {len(steps)} step lines")
+    return api.upload_text(normalized, sop_upload_name(sop_path))
+
+
+def sop_upload_name(sop_path: str = DEFAULT_SOP_PATH) -> str:
+    """The name the SOP is uploaded under — just its basename.
+
+    So sop/oring.txt arrives as `oring.txt` and the local file and the platform
+    file have the same name. Earlier revisions of this script named the upload
+    after the CLIP, which wrongly implied a per-clip procedure (all twelve clips
+    share one SOP), and then after a content hash, which was unreadable.
+
+    The trade-off of a stable name: the platform's `file_id` IS the basename, so
+    editing the SOP and re-running REPLACES the copy on the platform, and a past
+    run's exact text is no longer retrievable from there. That is fine — the SOP
+    is committed in git, which is the actual system of record, and a changed SOP
+    changes the output digest anyway.
+    """
+    return os.path.basename(sop_path)
+
+
 def parse_ground_truth(filename: str) -> dict[int, bool]:
     """Ground truth from a filename like 1_pass_2_pass_3_fail_A.mp4.
 
@@ -260,7 +296,7 @@ def main() -> None:
         print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
         print(json.dumps({"connectors": {"source": [
             {"type": "file", "id": os.path.basename(args.video), "format": "mp4"},
-            {"type": "file", "id": f"sop_{clip}.txt", "format": "txt"},
+            {"type": "file", "id": sop_upload_name(args.sop), "format": "txt"},
         ]}}, indent=2))
         print(f"\nthe SOP that would be uploaded ({len(steps)} steps, "
               f"one per line):\n")
@@ -306,7 +342,7 @@ def main() -> None:
     print(f"\nuploading {args.video} "
           f"({os.path.getsize(args.video) / 1e6:.1f} MB) ...")
     video_id = api.upload_file(args.video)
-    sop_id = api.upload_text(sop_text(steps), f"sop_{clip}.txt")
+    sop_id = upload_sop(args.sop, steps)
     print(f"  video file_id={video_id}\n  sop   file_id={sop_id}")
 
     # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and

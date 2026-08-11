@@ -34,7 +34,7 @@ import time
 
 import tva_api as api
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
-                            parse_ground_truth, sop_text)
+                            parse_ground_truth, sop_text, upload_sop)
 
 OUT_DIR = "eval_out"
 
@@ -113,7 +113,10 @@ def main() -> None:
     print(f"{len(clips)} clip(s), sequential, ~9 min each "
           f"-> ~{len(clips) * 9} min total\n")
 
-    sop_id = api.upload_text(sop_text(steps), "sop_sweep.txt")
+    # One upload for the whole sweep: every clip is checked against the SAME
+    # procedure, so the SOP is uploaded once and its file_id reused.
+    sop_id = upload_sop(args.sop, steps)
+    print(f"SOP uploaded as {sop_id}\n")
     log = []
     for i, path in enumerate(clips, 1):
         stem = os.path.splitext(os.path.basename(path))[0]
