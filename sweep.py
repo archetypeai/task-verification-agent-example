@@ -41,7 +41,7 @@ import time
 
 import tva_api as api
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
-                            parse_ground_truth, upload_sop)
+                            parse_ground_truth, resolve_clip, upload_sop)
 
 OUT_DIR = "eval_out"
 
@@ -104,11 +104,12 @@ def main() -> None:
         requested = [c for arg in args.clips for c in arg.split(",") if c.strip()]
         clips = []
         for c in requested:
-            c = c.strip()
-            p = c if os.path.exists(c) else os.path.join(args.dir, f"{c}.mp4")
-            if not os.path.exists(p):
-                sys.exit(f"no such clip: {c}\n"
-                         f"  run 'python3 sweep.py --list' to see the stems")
+            p = resolve_clip(c.strip(), args.dir)
+            if p is None:
+                sys.exit(f"no such clip: {c.strip()}\n"
+                         f"  looked for it as a path, and in {args.dir}/ with and "
+                         f"without a video extension.\n"
+                         f"  run 'python3 sweep.py --list' to see what is there.")
             clips.append(p)
     else:
         sys.exit("pass --clips <stems...> or --all (or --list to see what there is)")

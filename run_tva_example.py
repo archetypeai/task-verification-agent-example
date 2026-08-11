@@ -61,6 +61,7 @@ import tva_api as api
 
 # The default clip: 31 s, 640x480, three steps all performed correctly. The
 # filename encodes the ground truth — see parse_ground_truth() and the README.
+CLIP_DIR = "data/clips"
 VIDEO_PATH = "data/clips/1_pass_2_pass_3_pass_A.mp4"
 
 # NORMALLY you target the blueprint KEY, not an id: a key resolves to whatever is
@@ -124,6 +125,28 @@ def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
 
 # Statuses the TaskVerificationResultsParserNode emits, per the design doc.
 STATUSES = ("PASSED", "FAILED", "MISSING")
+
+
+# Extensions a clip may carry. `ls data/clips` shows names WITH the extension, so
+# pasting one is the natural thing to do — accept both that and the bare stem
+# that --list prints.
+VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi")
+
+
+def resolve_clip(name: str, clip_dir: str) -> str | None:
+    """Resolve a user-supplied clip to a path, or None.
+
+    Accepts, in order: an existing path; a name already carrying a video
+    extension, inside clip_dir; and a bare stem, to which each known extension is
+    appended. An earlier version appended ".mp4" unconditionally, so passing the
+    filename that `ls` shows produced "<name>.mp4.mp4" and a confusing "no such
+    clip" for a clip that was plainly right there.
+    """
+    if os.path.exists(name):
+        return name
+    candidates = [os.path.join(clip_dir, name)] if name.lower().endswith(VIDEO_EXTS) \
+        else [os.path.join(clip_dir, name + ext) for ext in VIDEO_EXTS]
+    return next((c for c in candidates if os.path.exists(c)), None)
 
 
 def sop_text(steps: list[str]) -> str:
@@ -317,10 +340,13 @@ def main() -> None:
         print(sop_text(steps))
         return
 
-    if not os.path.exists(args.video):
+    video = resolve_clip(args.video, CLIP_DIR)
+    if video is None:
         sys.exit(f"no such video: {args.video}\n"
-                 f"  The clips are not committed — see the README's Stage 1 for "
-                 f"where they come from.")
+                 f"  looked for it as a path, and in {CLIP_DIR}/ with and without "
+                 f"a video extension.\n"
+                 f"  run 'python3 sweep.py --list' to see what is there.")
+    args.video = video
 
     # Preflight BEFORE uploading. A value the blueprint silently ignores should
     # be reported before spending 9 minutes of GPU, not after. This reads the
