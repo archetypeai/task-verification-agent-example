@@ -12,7 +12,10 @@ EVERY run and is never cached, so the marginal cost of one more clip in a sweep 
 much lower than the first.
 
     python3 sweep.py --list                     # what is on disk, with labels
+
+    # clip stems, SPACE-separated (commas work too). Stems come from --list.
     python3 sweep.py --clips 1_pass_2_pass_3_pass_A 1_pass_2_pass_3_fail_A
+
     python3 sweep.py --all                      # every clip in data/clips
     python3 sweep.py --all --max-frames 16      # the blueprint default, for contrast
 
@@ -50,7 +53,10 @@ def label_str(clip: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--clips", nargs="+", help="clip stems or paths to run")
+    ap.add_argument("--clips", nargs="+",
+                    help="clip stems or paths, SPACE-separated (commas also "
+                         "accepted): --clips 1_pass_2_pass_3_pass_A "
+                         "1_pass_2_pass_3_fail_A")
     ap.add_argument("--all", action="store_true", help="every mp4 in data/clips")
     ap.add_argument("--dir", default="data/clips")
     ap.add_argument("--list", action="store_true",
@@ -92,11 +98,17 @@ def main() -> None:
     if args.all:
         clips = available
     elif args.clips:
+        # Space-separated is the documented form (nargs="+"), but commas are an
+        # easy assumption to make, so accept "a,b" and "a b" alike rather than
+        # failing on a plausible guess.
+        requested = [c for arg in args.clips for c in arg.split(",") if c.strip()]
         clips = []
-        for c in args.clips:
+        for c in requested:
+            c = c.strip()
             p = c if os.path.exists(c) else os.path.join(args.dir, f"{c}.mp4")
             if not os.path.exists(p):
-                sys.exit(f"no such clip: {c}")
+                sys.exit(f"no such clip: {c}\n"
+                         f"  run 'python3 sweep.py --list' to see the stems")
             clips.append(p)
     else:
         sys.exit("pass --clips <stems...> or --all (or --list to see what there is)")

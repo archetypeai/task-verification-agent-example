@@ -390,8 +390,12 @@ before the run rather than inferred afterwards.
 ## Stage 4 — Run
 
 ```sh
-python3 run_tva_example.py                              # one clip
-python3 sweep.py --clips 1_pass_2_pass_3_fail_A …       # several, sequential
+python3 run_tva_example.py                    # one clip, the default
+
+# several clips, run one at a time. Stems are SPACE-separated, from --list.
+python3 sweep.py --clips 1_pass_2_pass_3_fail_A 1_fail_2_pass_3_pass_A
+
+python3 sweep.py --all                        # all twelve (2.5-3 hours)
 ```
 
 Timings from real runs, and they are dominated by cold start:
