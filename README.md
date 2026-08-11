@@ -113,8 +113,18 @@ Upload video + SOP → create a bundle → run → stream `/logs` → download �
 report and score it. **~13 minutes** (754-814 s observed), of which ~7 is model
 loading — plus queue time if someone else has the single dev GPU.
 
+To check every clip instead of one — same bundle, same SOP, one run per video:
+
+```sh
+python3 sweep.py --list             # what is on disk, with labels. No API calls.
+python3 sweep.py --all --dry-run    # see the plan, no API calls
+python3 sweep.py --all              # one bundle, all 12 clips, sequential (~2.6 h)
+python3 evaluate.py eval_out/*.jsonl
+```
+
 Every script here is **stdlib-only**: no virtualenv, no `requirements.txt`, no
-install step. Scoring needs no API key at all:
+install step. Three of the four commands above touch no API at all, and scoring
+never does:
 
 ```sh
 python3 evaluate.py reference/*.jsonl
