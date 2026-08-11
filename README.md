@@ -428,6 +428,26 @@ python3 sweep.py --all                        # all twelve, ~2.6 hours
 # in-flight run instead of orphaning it on the shared GPU.
 ```
 
+### If the client dies, the runs do not
+
+The runs live on the **platform**, not in the client. A closed laptop, a dropped
+network, a Ctrl-C or an exhausted retry budget abandons results that are already
+computed — and run outputs do not expire. So there is a recovery path, and no
+reason to ever re-run a sweep because nobody was listening:
+
+```sh
+python3 sweep.py --collect                    # harvest every finished run
+python3 sweep.py --collect --bundle bnd_5a33…  # just one sweep's runs
+```
+
+It skips clips already on disk and ignores runs still in flight, so it is safe to
+run repeatedly while a sweep is still going. It also asks each run for its results
+regardless of the instance `status`, because that field is not a reliable
+terminality signal.
+
+`python3 sweep.py --cancel-all` is the other half: an abandoned run holds the
+shared GPU, so cancel what you are not waiting for.
+
 Timings from real runs, and they are dominated by cold start:
 
 | phase | time |

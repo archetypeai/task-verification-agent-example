@@ -98,6 +98,68 @@ def submit_all(args, bundle_id: str, sop_id: str, clips: list[str]) -> None:
     print(f"\nscore it:  python3 evaluate.py {args.out_dir}/*.jsonl")
 
 
+def collect(out_dir: str, bundle_id: str | None = None,
+            limit: int = 100) -> None:
+    """Download the output of every finished run, after the fact.
+
+    The recovery path, and the reason it exists: the runs live on the PLATFORM,
+    not in the client. A client that dies — closed laptop, lost network, Ctrl-C,
+    an exhausted retry budget — abandons results that are already computed and
+    that do not expire. This walks the org's instances and harvests whatever is
+    ready, so a sweep never has to be re-run because nobody was listening.
+
+    Safe to run repeatedly: it skips clips already on disk and ignores runs that
+    are still going.
+    """
+    instances = api.request("GET",
+                            f"{api.agents_base()}/instances?limit={limit}")
+    rows = [x for x in instances.get("data", [])
+            if x.get("blueprint") == "tva"
+            and (bundle_id is None or x.get("bundle_id") == bundle_id)]
+    if not rows:
+        print("no tva runs found" + (f" for bundle {bundle_id}" if bundle_id else ""))
+        return
+
+    os.makedirs(out_dir, exist_ok=True)
+    saved = skipped = pending = empty = 0
+    for x in sorted(rows, key=lambda r: str(r.get("created_at"))):
+        aid, status = x["id"], x.get("status")
+        # Ask for results regardless of `status`, which is not a reliable
+        # terminality signal — a finished job has been seen still reading
+        # `running`. An unfinished run simply returns nothing.
+        res = api.request("GET", f"{api.agents_base()}/instances/{aid}/results")
+        items = res.get("data") or []
+        if not items:
+            pending += 1
+            print(f"  {aid}  {status:9}  no results yet")
+            continue
+        inner = items[0].get("data") or {}
+        # The output filename carries the clip: agt_<id>__output_<clip>.jsonl
+        name = str(inner.get("filename") or "")
+        stem = name.split("__output_", 1)[-1].removesuffix(".jsonl") or aid
+        out_path = os.path.join(out_dir, f"tva-output-{stem}.jsonl")
+        if os.path.exists(out_path):
+            skipped += 1
+            continue
+        payload = api.fetch_results(aid, out_path)
+        if payload is None:
+            pending += 1
+            continue
+        recs = [json.loads(l) for l in payload.decode(errors="replace").splitlines()
+                if l.strip()]
+        n = sum(len(r.get("results", [])) for r in recs)
+        if n == 0:
+            empty += 1
+        print(f"  {aid}  {status:9}  {stem:<32s} {n} verdict(s), "
+              f"{len(payload)} bytes -> {out_path}")
+        saved += 1
+
+    print(f"\nsaved {saved}, already had {skipped}, still running {pending}"
+          + (f", EMPTY {empty} (reasoning overflow — see the README)" if empty else ""))
+    if saved or skipped:
+        print(f"score it:  python3 evaluate.py {out_dir}/*.jsonl")
+
+
 def cancel_all() -> None:
     """Cancel every non-terminal run in the org. The escape hatch for --submit-all."""
     instances = api.request("GET", f"{api.agents_base()}/instances?limit=100")
@@ -144,11 +206,22 @@ def main() -> None:
                          "already done, estimated time — and stop. No API calls.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"SOP steps, one per line (default: {DEFAULT_SOP_PATH})")
+    ap.add_argument("--collect", action="store_true",
+                    help="download the output of every finished tva run and stop. "
+                         "Use after a disconnect, a closed laptop or a Ctrl-C: the "
+                         "runs continue on the platform and their results do not "
+                         "expire, so nothing needs re-running. Safe to repeat.")
+    ap.add_argument("--bundle", metavar="ID",
+                    help="with --collect, restrict to one bundle's runs.")
     ap.add_argument("--cancel-all", action="store_true",
                     help="cancel every non-terminal run in the org and stop. The "
                          "escape hatch after --submit-all, since an abandoned run "
                          "blocks the shared GPU.")
     args = ap.parse_args()
+
+    if args.collect:
+        collect(args.out_dir, args.bundle)
+        return
 
     if args.cancel_all:
         cancel_all()
