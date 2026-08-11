@@ -232,6 +232,42 @@ def inert_values(doc: dict, values: dict) -> list[str]:
             or ("${values." + k + "}") not in wired]
 
 
+# Sink formats that have actually produced output, and one that provably cannot.
+#
+# `tva` was republished on 2026-08-11 at 22:01:18 with its sink format changed
+# from `jsonl/per-request` to `json/per-request`, for which no connector is
+# registered. Every run against it dies at graph instantiation:
+#
+#   ERROR  instantiating graph: no connector registered for
+#          format="json/per-request" kind="s3"
+#   ERROR  pod.terminated  Container agent terminated: Error (exit=1)
+#
+# The platform validates the graph AFTER downloading and loading both models, so
+# the failure costs the full cold start — 996 s observed — and leaves no results.
+# Nothing in the bundle response hints at it: the bundle is `status: ready`.
+#
+# There is no endpoint that lists registered connectors, so this is an allowlist
+# of what has run plus the one value observed to be broken. It reads the blueprint
+# document, so a fixed blueprint stops warning with no code change here.
+KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request"}
+KNOWN_BROKEN_SINK_FORMATS = {"json/per-request"}
+
+
+def check_sink(doc: dict) -> str | None:
+    """Return a warning if the blueprint's sink looks un-instantiable, else None."""
+    fmt = ((doc.get("connectors") or {}).get("sink") or {}).get("config", {}).get("format")
+    if fmt in KNOWN_BROKEN_SINK_FORMATS:
+        return (f"sink format {fmt!r} has NO REGISTERED CONNECTOR on dev. This run "
+                f"will load both models (~7 min) and then die at graph "
+                f"instantiation with no results.\n"
+                f"    Pin a blueprint whose sink is one of "
+                f"{sorted(KNOWN_GOOD_SINK_FORMATS)} — see the README.")
+    if fmt not in KNOWN_GOOD_SINK_FORMATS:
+        return (f"sink format {fmt!r} has not been seen to work here. If the run "
+                f"dies at 'instantiating graph', this is why.")
+    return None
+
+
 def create_bundle(blueprint: str, name: str, values: dict) -> dict:
     """POST /agents/bundles — note the PLURAL. The singular form 404s."""
     return request("POST", f"{agents_base()}/bundles",

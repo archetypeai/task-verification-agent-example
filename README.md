@@ -25,12 +25,79 @@ SOP (.txt) ──► PrepareSOPNode ──────────┤
          whisper ASR ───────────────────┘
 ```
 
-**The one thing that makes TVA different from MGA: the SOP arrives at runtime.**
-MGA's blueprint sets `text_extensions: []` and hardcodes its instruction, so there
-is nothing to pass. TVA's wires `source.text -> prepare.in`, so every run sends
-**two** source inputs — the video and the SOP as a `.txt` file. That single edge is
-what turns "describe this video" into "check this video against my procedure",
-and most of this README is about the consequences.
+**The one thing that makes TVA different from MGA: the SOP arrives at runtime, per
+run.** Read the two blueprints' source connectors side by side — this is the whole
+distinction, and it is two lines of YAML:
+
+```yaml
+# mga                                    # tva
+source:                                  source:
+  key: MultiModalSource                    key: MultiModalSource
+  config:                                  config: {}      # accepts a .txt input
+    default_text: ${values.prompt}
+    text_extensions: []   # accepts NO text input
+```
+
+MGA takes **no text input at all** (`text_extensions: []`) and gets its instruction
+from a bundle *value*, so the instruction is fixed for the life of a bundle. TVA
+accepts a `.txt` and routes it `source.text -> prepare.in` through a dedicated
+`PrepareSOPNode` — so every run carries its own procedure and **one bundle serves
+every SOP.** That single edge turns "describe this video" into "check this video
+against my procedure", and most of this README is about the consequences.
+
+## ⚠️ The canonical `tva` blueprint cannot currently produce output
+
+Read this before running anything, because it costs 7 minutes to discover.
+
+`tva` was republished on **2026-08-11 at 22:01:18** — mid-session, while runs were
+in flight — with its sink format changed from `jsonl/per-request` to
+`json/per-request`. **No connector is registered for that format**, so every run
+against the canonical, active blueprint dies at graph instantiation:
+
+```
+22:19:05  ERROR  error           instantiating graph: no connector registered for
+                                 format="json/per-request" kind="s3"
+22:19:07  ERROR  pod.terminated  Container agent terminated: Error (exit=1)
+```
+
+The two blueprints are **byte-identical apart from that one string**:
+
+| | canonical `tva` = `blp_7xfkarv…` | superseded `blp_6dp7cye…` |
+|---|---|---|
+| sink format | `json/per-request` | **`jsonl/per-request`** |
+| `max_new_tokens` default | 8192 | 2048 |
+| nodes, graph, models | identical | identical |
+| result | **exit 1, no output** | **works** |
+
+Three things make this expensive rather than merely broken:
+
+- **The graph is validated AFTER both models are downloaded and loaded.** The run
+  spends 39 s on whisper and 5min8s + 1min39s on newton-fusion, *then* fails.
+  Observed cost: **996 s for zero output.**
+- **Nothing upstream hints at it.** The bundle returns `status: ready`. The failure
+  appears only in `/logs`, and `/results` is simply empty.
+- **A sweep repeats it once per clip.** Four clips would be ~40 GPU-minutes of
+  identical failure on a shared single-GPU dev box.
+
+So this repo **pins the superseded blueprint by id** and preflights the sink
+client-side, turning a 7-minute failure into an instant one:
+
+```
+  ** sink format 'json/per-request' has NO REGISTERED CONNECTOR on dev. This run
+     will load both models (~7 min) and then die at graph instantiation.
+  refusing to spend ~7 min of GPU on a run that cannot produce output.
+```
+
+`sweep.py` refuses outright; `run_tva_example.py` aborts unless you pass `--force`.
+**To flip back when the sink is fixed**, set `BLUEPRINT_DEFAULT = BLUEPRINT_ACTIVE`
+in `run_tva_example.py` — the preflight reads the blueprint document rather than a
+hardcoded list, so it stops warning on its own and doubles as a regression test.
+
+**The general lesson, and it contradicts the advice this repo started from:** MGA's
+example concluded *reference blueprints by key, not by id*, because a pinned id
+stopped resolving. Here the key resolves fine and produces nothing, while the
+superseded id works. **Neither is safe on its own** — what is safe is reading the
+blueprint document before spending GPU.
 
 ## Quick start — one command
 
@@ -64,9 +131,19 @@ python3 evaluate.py reference/*.jsonl
 Five properties, none of them documented in the blueprint:
 
 - **`step` is 0-BASED.** A 3-step SOP returns steps 0, 1, 2. Humans write SOPs
-  1-based, so a scorer that joins them naively is off by one — and it produces
-  plausible-looking wrong alignments rather than an error. Verified on a real run,
-  asserted in `run_tva_example.STEP_BASE`, and auto-detected in `evaluate.py`.
+  1-based, so a scorer that joins them naively is off by one — and it fails
+  *quietly*. This example hit it for real: a scorer assuming 1-based read a
+  perfect 3-of-3 run as
+
+  ```
+  step 1: expected PASS  got PASSED        [OK]
+  step 2: expected PASS  got PASSED        [OK]
+  step 3: expected PASS  got NOT REPORTED  [MISS]   <-- the verdict existed, under step 2
+  ```
+
+  Two steps still line up, so it looks like a model that missed the last step
+  rather than a join bug. Verified on a real run, asserted in
+  `run_tva_example.STEP_BASE`, and auto-detected in `evaluate.py`.
 - **Timestamps in seconds come free.** The blueprint exposes only
   `parser_output_frame_indices`; `timestamp_start`/`timestamp_end` are emitted
   anyway, so no frames→seconds conversion is needed.
@@ -160,10 +237,11 @@ A binary pass/fail label cannot express that distinction, so `evaluate.py` score
 the verdict (PASSED vs not) and reports the FAILED/MISSING split separately rather
 than hiding it inside one accuracy number.
 
-**Step 2 is `pass` in all twelve clips.** There are no negative examples for it, so
-"always say PASSED" scores 100% on step 2 and its accuracy is not evidence of
-anything. `sweep.py --list` prints this warning itself. Any future recording
-session should add a cross-threaded or skipped step 2.
+**Step 2 is `pass` in all twelve clips**, so read its column as a consistency
+check rather than as a detection result — "always say PASSED" also scores 100% on
+it. Steps 1 and 3 are where the discrimination is, and both have failures.
+`sweep.py --list` prints this note itself so nobody quotes a step-2 number as
+accuracy.
 
 **These clips have no audio track at all** — verified with `ffprobe`: one video
 stream, no audio stream. The blueprint runs `audio_reader → whisper →
@@ -196,10 +274,11 @@ string", so **the line breaks are the step boundaries and nothing else is.** A
 wrapped line silently becomes two steps.
 
 **There is no `prompt` value on this blueprint.** The system message lives inside
-`TaskVerificationPromptGeneratorNode` and is not exposed, so unlike MGA there is
-nothing to tune and nothing to get wrong — no format instruction that can make the
-parser return zero steps. The flip side is that **the SOP wording is your entire
-influence over the model.** Three choices in the wording above:
+`TaskVerificationPromptGeneratorNode` and is not exposed. That is a genuine
+simplification rather than a gap: MGA's `prompt` is exposed and *fragile* — a
+prompt that specifies its own output format makes its parser return zero steps.
+TVA gives you no way to make that mistake. The flip side is that **the SOP wording
+is your entire influence over the model.** Three choices in the wording above:
 
 | choice | why |
 |---|---|
@@ -279,6 +358,13 @@ downloaded newton-fusion from scratch — 5 minutes, twice. **~7 of every 13 min
 is model loading**, so the marginal cost of one more clip is far lower than the
 first, and batching with `sweep.py` is worth it.
 
+**Generation is deterministic.** The same clip and SOP run twice — 25 minutes
+apart, under **two different API keys in two different orgs** — produced
+byte-identical output: 678 bytes, md5 `7eb028ac7d39938b261be17eaaf3e2bb`. So a
+matching digest means you reproduced a run exactly, and a differing one means
+something real changed (the clip, `max_frames`, the SOP, or the blueprint). The
+committed file in `reference/` is that digest.
+
 **Dev serializes these jobs.** Run 2 was submitted while run 1 held the GPU and
 waited **7 minutes** for it. Note the trap:
 
@@ -315,11 +401,14 @@ IoU column as "unmeasured", not as "localises perfectly".**
 
 - **The `/agents` API is dev-only.** Prod 404s on every `/agents` path; a prod key
   on dev returns 401. Two different symptoms for the same class of mistake.
-- **A blueprint id can change under you, mid-session.** `tva` was republished at
-  **22:01:18 while runs were in flight**: `blp_6dp7cye…` → `blp_7xfkarv…`, same
-  key, same org, graph and nodes byte-identical, and `max_new_tokens`'s default
-  raised **2048 → 8192**. Reference blueprints by **KEY**, not by id — MGA's
-  example had a pinned id stop resolving entirely for the same reason.
+- **A blueprint can be republished under you, mid-session, and the new version can
+  be broken.** See the warning at the top: `tva` changed id and sink format at
+  22:01:18 while runs were in flight, and the new canonical version cannot emit
+  output. **Read the blueprint document before every run** — by key or by id, the
+  identifier alone tells you nothing about whether the graph will instantiate.
+- **The graph is validated after the models are loaded, not before.** A blueprint
+  that cannot instantiate still costs the full ~7-minute cold start. Validating
+  connectors and node configs first would turn 996 s into about 1 s.
 - **`connectors.source[].id` wants the file BASENAME.** `/v0.5/files` returns both
   a `file_id` (the basename) and a `file_uid` (`fil_…`); the connector wants the
   former. The uid fails at source resolution, after the pod has started.
@@ -377,8 +466,6 @@ Observations for the author, not defects.
 
 ## Not yet built
 
-- **A step 2 negative.** Every clip passes step 2, so nothing here can detect a
-  false PASS on it. This is the single most valuable addition to the recording set.
 - **An audio-bearing clip.** The whisper half of the pipeline is loaded on every
   run and exercised by none of these.
 - **A `max_frames` sweep.** 64 vs the blueprint's 16 is the obvious first

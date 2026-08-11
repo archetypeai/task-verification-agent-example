@@ -33,8 +33,8 @@ import sys
 import time
 
 import tva_api as api
-from run_tva_example import (DEFAULT_SOP_PATH, load_sop, parse_ground_truth,
-                            sop_text)
+from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
+                            parse_ground_truth, sop_text)
 
 OUT_DIR = "eval_out"
 
@@ -51,7 +51,10 @@ def main() -> None:
     ap.add_argument("--dir", default="data/clips")
     ap.add_argument("--list", action="store_true",
                     help="list clips and their labels, then stop — no API calls")
-    ap.add_argument("--blueprint", default="tva")
+    ap.add_argument("--blueprint", default=BLUEPRINT_DEFAULT,
+                    help=f"blueprint id or key (default: {BLUEPRINT_DEFAULT}). "
+                         f"The key 'tva' currently resolves to a blueprint whose "
+                         f"sink cannot be instantiated — see the README.")
     ap.add_argument("--max-frames", type=int, default=64)
     ap.add_argument("--max-new-tokens", type=int, default=2048)
     ap.add_argument("--out-dir", default=OUT_DIR)
@@ -101,6 +104,11 @@ def main() -> None:
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
     if inert:
         print(f"  WARNING: {inert} is not wired and will be silently ignored.")
+    sink_warning = api.check_sink(bp["document"])
+    if sink_warning:
+        # Refuse rather than warn: a sweep would repeat the same doomed cold
+        # start once per clip, which is how 40 GPU-minutes get spent on nothing.
+        sys.exit(f"REFUSING TO RUN: {sink_warning}")
     print(f"values: {json.dumps(values)}")
     print(f"{len(clips)} clip(s), sequential, ~9 min each "
           f"-> ~{len(clips) * 9} min total\n")

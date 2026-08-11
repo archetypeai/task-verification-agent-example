@@ -62,12 +62,26 @@ import tva_api as api
 # filename encodes the ground truth — see parse_ground_truth() and the README.
 VIDEO_PATH = "data/clips/1_pass_2_pass_3_pass_A.mp4"
 
-# Target the blueprint KEY, not an id. The platform accepts either, and a key
-# resolves to whatever is currently canonical and active. The MGA example learned
-# this the hard way: a pinned blueprint id STOPPED RESOLVING mid-session when the
-# blueprint was republished and the node schema changed under it. Pin an id only
-# to reproduce a specific past run.
-BLUEPRINT_DEFAULT = "tva"
+# NORMALLY you target the blueprint KEY, not an id: a key resolves to whatever is
+# canonical and active, and the MGA example had a pinned id stop resolving
+# mid-session when the blueprint was republished under it.
+#
+# THIS FILE PINS AN ID ANYWAY, and the reason is the mirror image of that advice.
+# `tva` was republished on 2026-08-11 at 22:01:18 with its sink format changed to
+# `json/per-request`, which has no registered connector — so the CANONICAL, ACTIVE
+# blueprint cannot produce output at all. It loads both models for ~7 minutes and
+# then dies at graph instantiation (see tva_api.check_sink). The superseded
+# blueprint below is byte-identical apart from that one string, and it works.
+#
+# So: neither "use the key" nor "pin an id" is safe on its own. What is safe is
+# checking the blueprint document before spending GPU, which the preflight does.
+#
+# TO FLIP BACK once the sink is fixed upstream: set BLUEPRINT_DEFAULT = "tva".
+# The preflight will stop warning on its own — it reads the document, not a
+# hardcoded list of blueprint ids.
+BLUEPRINT_ACTIVE = "tva"                                  # broken sink, see above
+BLUEPRINT_WORKING = "blp_6dp7cye17f8qct7a9jbzx6yhfy"      # superseded, runs
+BLUEPRINT_DEFAULT = BLUEPRINT_WORKING
 
 # The SOP lives in a TEXT FILE, not in this script, because that is what it is on
 # the wire: the runner writes it to a .txt, uploads it, and passes it as a second
@@ -222,6 +236,10 @@ def main() -> None:
                     help="pretty-print an output file and stop — no API calls")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the exact payloads and stop — no API calls")
+    ap.add_argument("--force", action="store_true",
+                    help="run even if the blueprint's sink cannot be "
+                         "instantiated (see check_sink) — normally that is a "
+                         "guaranteed 7-minute failure, so it aborts instead.")
     args = ap.parse_args()
 
     if args.show:
@@ -267,6 +285,14 @@ def main() -> None:
     if inert:
         print(f"  WARNING: {inert} is not wired on this blueprint and will be "
               f"silently ignored.")
+    # The expensive one: a sink the platform cannot instantiate wastes the whole
+    # cold start before failing. Catch it here, for free.
+    sink_warning = api.check_sink(doc)
+    if sink_warning:
+        print(f"  ** {sink_warning}")
+        if not args.force:
+            sys.exit("refusing to spend ~7 min of GPU on a run that cannot "
+                     "produce output. Pass --force to do it anyway.")
     for k, v in sorted(values.items()):
         print(f"  {k:16} {str(v):8} -> "
               f"{'NOT WIRED — ignored' if k in inert else 'honoured'}"
