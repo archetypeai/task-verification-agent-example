@@ -12,9 +12,10 @@ virtualenv, no GPU, no atai_core checkout.
     python3 run_tva_example.py --dry-run            # print the payloads, call nothing
     python3 run_tva_example.py --show out.jsonl     # re-read an output, no API calls
 
-Expect ~9 minutes: ~7 min of model download and load on EVERY run (nothing is
-cached between runs), then well under a minute of actual processing for a 30 s
-clip. Dev has one GPU and serializes these, so a second concurrent run queues.
+Expect ~13 minutes (754-814 s observed): ~7 min of model download and load on
+EVERY run — nothing is cached between runs — then ~5 min of generation for a 30 s
+clip. Dev has one GPU and serializes these, so a concurrent run queues behind
+yours; 796 s of queue wait has been observed.
 
 WHAT IS DIFFERENT FROM THE MGA EXAMPLE, and it is the whole point:
 

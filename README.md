@@ -110,7 +110,8 @@ python3 run_tva_example.py
 ```
 
 Upload video + SOP → create a bundle → run → stream `/logs` → download → print the
-report and score it. **~13 minutes**, of which ~7 is model loading.
+report and score it. **~13 minutes** (754-814 s observed), of which ~7 is model
+loading — plus queue time if someone else has the single dev GPU.
 
 Every script here is **stdlib-only**: no virtualenv, no `requirements.txt`, no
 install step. Scoring needs no API key at all:

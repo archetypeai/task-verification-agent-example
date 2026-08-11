@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Run TVA across several labelled clips, one at a time, and save each output.
 
-A single run is ~9 minutes and dev has ONE GPU that serializes jobs, so this is
-deliberately sequential: submitting concurrently produced queue waits rather than
-parallelism. Twelve clips is therefore ~1h50m of wall clock. Budget accordingly,
-and prefer --clips to pick a subset.
+A single run is ~13 minutes of job time (754-814 s observed) and dev has ONE GPU
+that serializes jobs, so this is deliberately sequential: submitting concurrently
+produces queue waits rather than parallelism — 796 s observed for one clip that
+queued behind another. Twelve clips is therefore 2.5-3 hours of wall clock. Budget
+accordingly, and prefer --clips to pick a subset.
+
+Almost all of that is cold start: ~7 minutes of model download and load happens on
+EVERY run and is never cached, so the marginal cost of one more clip in a sweep is
+much lower than the first.
 
     python3 sweep.py --list                     # what is on disk, with labels
     python3 sweep.py --clips 1_pass_2_pass_3_pass_A 1_pass_2_pass_3_fail_A
@@ -112,8 +117,8 @@ def main() -> None:
         # start once per clip, which is how 40 GPU-minutes get spent on nothing.
         sys.exit(f"REFUSING TO RUN: {sink_warning}")
     print(f"values: {json.dumps(values)}")
-    print(f"{len(clips)} clip(s), sequential, ~9 min each "
-          f"-> ~{len(clips) * 9} min total\n")
+    print(f"{len(clips)} clip(s), sequential, ~13 min each "
+          f"-> ~{len(clips) * 13} min total, plus queue if the GPU is busy\n")
 
     # One upload for the whole sweep: every clip is checked against the SAME
     # procedure, so the SOP is uploaded once and its file_id reused.
