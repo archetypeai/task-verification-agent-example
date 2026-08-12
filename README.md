@@ -201,6 +201,26 @@ input. This repo names its copies `.jsonl` after the sink format; the platform's
 `.json` is why an earlier version of `--collect` saved files as
 `<clip>.json.jsonl`.
 
+**The extension is not derived from the sink format, and it changed mid-session.**
+The same pinned blueprint, with `format: jsonl/per-request` throughout, emitted
+both:
+
+| run | UTC | emitted |
+|---|---|---|
+| `agt_7xa5n8yy…` | 21:46 | `…_1_pass_2_pass_3_pass_A.`**`jsonl`** |
+| `agt_2jcbx7ka…` | 23:37 | `…_1_pass_2_pass_3_pass_A.`**`json`** |
+
+Nothing caller-side differed. And the declared format does not predict the
+extension in either agent: `mga` declares `json/per-request` and emitted `.jsonl`
+at 19:57, while `tva` declares `jsonl/per-request` and emitted `.jsonl` then
+`.json`. So **the two agents do not use different formats by design** — MGA's
+`.jsonl` artifact simply predates a platform-side change that TVA's `.json`
+follows.
+
+Two consequences: **do not key anything off the output extension** (match on
+`__output_` and strip whatever suffix is there — `--collect` does), and treat the
+`format` value as a contract about record structure rather than about filenames.
+
 The consequence is a real trap. **Because there is no trailing newline,
 concatenating outputs corrupts them:**
 
@@ -729,6 +749,16 @@ reproducing, not as a measured error rate.**
   former. The uid fails at source resolution, after the pod has started.
 - **Uploads enforce the DECLARED MIME type**, not the bytes. `text/plain` for the
   SOP and `video/mp4` for the clip. A `.mp4` declared as `text/csv` is rejected.
+- **An upload can report success and leave no object.** Twice in one session
+  `/v0.5/files` returned `is_valid: true` with a `file_id`, and the object was
+  absent — once a video, once the SOP — surfacing only inside the run ~13 minutes
+  later as `S3 object not found`, with `job.completed` on the job. `is_valid` is
+  not sufficient; **read the file back** (`GET /v0.5/files/download/{file_id}`)
+  before spending a run, which is what `tva_api.upload_file` now does.
+- **`file_id` IS the basename, so re-uploading replaces the object.** A run holds a
+  reference to the object as it was at resolution time, so re-uploading the same
+  name while a run is in flight is a plausible way to lose its inputs. Unique
+  per-run names avoid it entirely, at the cost of readable filenames.
 - **The bundle endpoint is plural.** `POST /agents/bundle` → 404; use
   `/agents/bundles`. The RED and OSM example repos still use the singular form.
 - **Starting a run returns 202, not 201.**

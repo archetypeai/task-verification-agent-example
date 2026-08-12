@@ -124,7 +124,7 @@ def guess_content_type(path: str) -> str:
     return ctype or "application/octet-stream"
 
 
-def upload_file(path: str, rename: str | None = None) -> str:
+def upload_file(path: str, rename: str | None = None, verify: bool = True) -> str:
     """POST a file to /v0.5/files, streamed from disk. Returns the file_id.
 
     The body is streamed rather than buffered: preamble + file handle +
@@ -173,10 +173,26 @@ def upload_file(path: str, rename: str | None = None) -> str:
                  f"{json.dumps(out)}\n"
                  f"  Nothing downstream will work — the run would fail with "
                  f"'S3 object not found' about 13 minutes in.")
-    return out["file_id"]
+    file_id = out["file_id"]
+    if verify:
+        # `is_valid: true` and a file_id are NOT sufficient. Twice on this dataset
+        # an upload reported success and the S3 object was simply absent — once a
+        # video, once the SOP text — each discovered only inside a run, ~13 min
+        # later, as `S3 object not found`. Fetching the file back is the only
+        # check that actually confirms it landed, and it costs one request.
+        status, _ = request("GET", f"{api_base()}/v0.5/files/download/{file_id}",
+                            raw=True, allow_status=True)
+        if status != 200:
+            sys.exit(f"upload of {path} reported success but the object is not "
+                     f"retrievable (GET /v0.5/files/download/{file_id} -> "
+                     f"{status}).\n"
+                     f"  This has happened twice here; re-uploading has fixed it. "
+                     f"Retry rather than starting a run, which would fail ~13 min "
+                     f"in with 'S3 object not found'.")
+    return file_id
 
 
-def upload_text(text: str, name: str) -> str:
+def upload_text(text: str, name: str, verify: bool = True) -> str:
     """Write `text` to a temp .txt and upload it. Returns the file_id.
 
     This is the SOP path. The blueprint's PrepareSOPNode "accumulates the SOP
@@ -187,7 +203,7 @@ def upload_text(text: str, name: str) -> str:
     path = os.path.join("data", name)
     with open(path, "w") as fh:
         fh.write(text if text.endswith("\n") else text + "\n")
-    return upload_file(path)
+    return upload_file(path, verify=verify)
 
 
 class _ChainedReader:
