@@ -317,8 +317,17 @@ def inert_values(doc: dict, values: dict) -> list[str]:
 # There is no endpoint that lists registered connectors, so this is an allowlist
 # of what has run plus the one value observed to be broken. It reads the blueprint
 # document, so a fixed blueprint stops warning with no code change here.
-KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request"}
-KNOWN_BROKEN_SINK_FORMATS = {"json/per-request"}
+# Both work as of 2026-08-12 16:42 UTC. `json/per-request` was un-instantiable for
+# ~18 hours (three consecutive canonical versions) and has since been fixed — a run
+# on the current canonical blueprint instantiated cleanly and wrote its output.
+#
+# The two differ in PACKAGING, not content:
+#   jsonl/per-request -> one .jsonl file, one line per request
+#   json/per-request  -> one NUMBERED .json file per request (…_0001.json)
+# So with several inputs in one run, `json` yields SEVERAL result entries. See
+# fetch_results(), which reads only the first and warns when there are more.
+KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request", "json/per-request"}
+KNOWN_BROKEN_SINK_FORMATS: set[str] = set()   # kept: the check is the regression test
 
 
 def check_sink(doc: dict) -> str | None:
@@ -506,6 +515,13 @@ def fetch_results(agent_id: str, out_path: str) -> bytes | None:
     if not items:
         print("  no results (a failed run leaves none)")
         return None
+    if len(items) > 1:
+        # `json/per-request` writes one numbered file PER REQUEST, so a run with
+        # several inputs returns several entries. Reading only the first would
+        # silently drop the rest.
+        print(f"  WARNING: {len(items)} result files returned; this saves only the "
+              f"first. With json/per-request each input gets its own numbered "
+              f"file — fetch the rest by ref if you sent multiple inputs.")
     inner = items[0].get("data") or {}
     ref = inner.get("ref") or items[0].get("ref")
     if not ref:

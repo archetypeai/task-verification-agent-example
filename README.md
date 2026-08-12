@@ -50,78 +50,60 @@ accepts a `.txt` and routes it `source.text -> prepare.in` through a dedicated
 every SOP.** That single edge turns "describe this video" into "check this video
 against my procedure", and most of this README is about the consequences.
 
-## ⚠️ The canonical `tva` blueprint cannot currently produce output
+## The canonical blueprint's sink was broken for ~18 hours — now fixed
 
-Read this before running anything, because it costs 7 minutes to discover.
+**Resolved 2026-08-12 ~16:42 UTC.** Kept because the reproduction commands and the
+`reference/` outputs were all produced during the outage, and because the shape of
+the failure is worth recognising.
 
-`tva` was republished on **2026-08-11 at 22:01:18** — mid-session, while runs were
-in flight — with its sink format changed from `jsonl/per-request` to
-`json/per-request`. **No connector is registered for that format**, so every run
-against the canonical, active blueprint dies at graph instantiation:
+`tva` was republished on 2026-08-11 at 22:01 with its sink format changed from
+`jsonl/per-request` to `json/per-request`, for which **no connector was registered**.
+Every run against the canonical blueprint died at graph instantiation:
 
 ```
-22:19:05  ERROR  error           instantiating graph: no connector registered for
-                                 format="json/per-request" kind="s3"
-22:19:07  ERROR  pod.terminated  Container agent terminated: Error (exit=1)
+ERROR  error           instantiating graph: no connector registered for
+                       format="json/per-request" kind="s3"
+ERROR  pod.terminated  Container agent terminated: Error (exit=1)
 ```
 
-**Three consecutive canonical versions have now shipped with it**, over ~18 hours,
-while the only version that can emit output remains the superseded one this repo
-pins:
+It persisted across **three consecutive canonical versions**:
 
-| version | published | sink format | `max_new_tokens` default | result |
+| version | published | sink format | tested | result |
 |---|---|---|---|---|
-| `blp_6dp7cye…` | 18:27 | **`jsonl/per-request`** | 2048 | **works** — pinned here |
-| `blp_7xfkarv…` | 22:01 | `json/per-request` | 8192 | exit 1, no output |
-| `blp_0tv0wxetd…` | 00:46 | `json/per-request` | 2048 | exit 1, no output |
-| `blp_6yvpfy3mb…` | **12:39** | `json/per-request` | **16384** | exit 1, no output |
+| `blp_6dp7cye…` | Aug 11 18:27 | `jsonl/per-request` | ✅ 38 runs | works — `reference/` used this |
+| `blp_7xfkarv…` | Aug 11 22:01 | `json/per-request` | ✅ 3 runs | exit 1, no output |
+| `blp_0tv0wxetd…` | Aug 12 00:46 | `json/per-request` | ❌ never run | assumed broken |
+| `blp_6yvpfy3mb…` | Aug 12 12:39 | `json/per-request` | ✅ | **works — the fix** |
 
-Every version is otherwise identical — same nodes, graph, and models. Only the sink
-string and the `max_new_tokens` default move, and **`max_model_len`,
-`repetition_penalty`, `stop` and `min_temporal_similarity_threshold` remain unexposed
-in all four.**
+Three things worth taking from it:
 
-⚠️ **The newest default looks self-inconsistent.** `max_new_tokens: 16384` exceeds
-the measured `max_seq_len` of 8192, and the engine enforces
-`max_new_tokens < max_seq_len`. So either the context window was raised alongside it
-— which would be the fix this document has been asking for — or the shipped default
-is invalid and any run relying on it dies at graph instantiation. The two are
-distinguishable in about a minute of GPU, because the validation error prints the
-current limit:
+- **The graph is validated AFTER both models load.** A blueprint that cannot
+  instantiate still costs the full ~7-minute cold start — 996 s observed for zero
+  output — and a sweep repeats that once per clip. Validating connectors up front
+  would turn it into about a second.
+- **Nothing upstream hints at it.** The bundle returns `status: ready`, the run
+  returns `202`, and the failure appears only in `/logs` with `/results` empty.
+- **An assumption is not a measurement, and mine went stale.** This document
+  asserted three broken versions on evidence from one, for eighteen hours, and
+  `check_sink()` refused to run the canonical blueprint on that basis. It took one
+  deliberate `--force` run to find the fix. **If a preflight encodes a denylist,
+  re-test it before trusting it** — which is why the check now reads the blueprint
+  document and treats both formats as good, so it keeps working as a regression test
+  without pre-judging.
 
-```sh
-python3 run_tva_example.py --max-new-tokens 999999 --force   # the error reports max_seq_len
-```
+### The two sink formats differ in packaging, not content
 
-Three things make this expensive rather than merely broken:
+The fix also revealed what the names mean, which the blueprint never says:
 
-- **The graph is validated AFTER both models are downloaded and loaded.** The run
-  spends 39 s on whisper and 5min8s + 1min39s on newton-fusion, *then* fails.
-  Observed cost: **996 s for zero output.**
-- **Nothing upstream hints at it.** The bundle returns `status: ready`. The failure
-  appears only in `/logs`, and `/results` is simply empty.
-- **A sweep repeats it once per clip.** Four clips would be ~40 GPU-minutes of
-  identical failure on a shared single-GPU dev box.
+| format | writes |
+|---|---|
+| `jsonl/per-request` | **one** `.jsonl` file, one line per request |
+| `json/per-request` | **one numbered `.json` file per request** — `…__output_<clip>_0001.json` |
 
-So this repo **pins the superseded blueprint by id** and preflights the sink
-client-side, turning a 7-minute failure into an instant one:
-
-```
-  ** sink format 'json/per-request' has NO REGISTERED CONNECTOR on dev. This run
-     will load both models (~7 min) and then die at graph instantiation.
-  refusing to spend ~7 min of GPU on a run that cannot produce output.
-```
-
-`sweep.py` refuses outright; `run_tva_example.py` aborts unless you pass `--force`.
-**To flip back when the sink is fixed**, set `BLUEPRINT_DEFAULT = BLUEPRINT_ACTIVE`
-in `run_tva_example.py` — the preflight reads the blueprint document rather than a
-hardcoded list, so it stops warning on its own and doubles as a regression test.
-
-**The general lesson, and it contradicts the advice this repo started from:** MGA's
-example concluded *reference blueprints by key, not by id*, because a pinned id
-stopped resolving. Here the key resolves fine and produces nothing, while the
-superseded id works. **Neither is safe on its own** — what is safe is reading the
-blueprint document before spending GPU.
+Same information, different packaging. **This matters for multi-input runs:** with
+`json/per-request`, several inputs produce several result entries, and a client that
+reads `data[0]` silently drops the rest. `tva_api.fetch_results()` now warns when
+more than one is returned.
 
 ## Quick start — one command
 

@@ -85,9 +85,12 @@ VIDEO_PATH = "data/clips/1_pass_2_pass_3_pass_A.mp4"
 # TO FLIP BACK once the sink is fixed upstream: set BLUEPRINT_DEFAULT = "tva".
 # The preflight will stop warning on its own — it reads the document, not a
 # hardcoded list of blueprint ids.
-BLUEPRINT_ACTIVE = "tva"                                  # broken sink, see above
-BLUEPRINT_WORKING = "blp_6dp7cye17f8qct7a9jbzx6yhfy"      # superseded, runs
-BLUEPRINT_DEFAULT = BLUEPRINT_WORKING
+# FIXED 2026-08-12: the canonical blueprint's sink was un-instantiable for ~18
+# hours and now works, so this targets the KEY again — which is the right default
+# and the advice the MGA example gives. The superseded id is kept only to reproduce
+# the runs in reference/, which were made against it.
+BLUEPRINT_DEFAULT = "tva"
+BLUEPRINT_HISTORIC_WORKING = "blp_6dp7cye17f8qct7a9jbzx6yhfy"   # what reference/ used
 
 # The SOP lives in a TEXT FILE, not in this script, because that is what it is on
 # the wire: the runner writes it to a .txt, uploads it, and passes it as a second
