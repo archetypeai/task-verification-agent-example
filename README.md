@@ -706,35 +706,31 @@ whole result:
 |---|---|
 | **the wrench** — a large steel tool that never enters frame | **3 of 3** ✅ |
 | **the o-ring, when it is the ONLY thing missing** | **0 of 4** ❌ |
-| **the o-ring, when the wrench is ALSO missing** | **1 of 1** ✅ |
+| **the o-ring, when the wrench is ALSO missing** | 1 of 3 attempts produced output at all; that one was correct ⚠️ |
 
-**The pattern is not "TVA cannot see the o-ring."** A later run detected it
-correctly, with a precise reason — *"The installation of the O-ring into the blue
-cap is not shown in the video."* What predicts failure is whether the omission is
-**isolated**:
+**But the same clip is unstable, so read the ✅ row cautiously.** A later run did
+detect the o-ring correctly, with a precise reason — *"The installation of the
+O-ring into the blue cap is not shown in the video."* — and that is a real
+observation. It is also **one of three attempts on that clip, the other two of
+which returned nothing at all**:
 
-| clip | skipped | budget | step-1 verdict |
+| clip | SOP | budget | result |
 |---|---|---|---|
-| `1_fail_2_pass_3_pass_A` | o-ring only, wrench used | 8192 | PASSED ❌ |
-| `1_fail_2_pass_3_pass_B` | o-ring only, wrench used | 8192 | PASSED ❌ |
-| `1_fail_2_pass_3_pass_E` | o-ring only, wrench used | 8192 | PASSED ❌ |
-| `1_fail_2_pass_3_pass_F` | o-ring only, wrench used | **5120** | PASSED ❌ |
-| `1_fail_2_pass_3_fail_A` | o-ring **and** wrench | 5760 | **MISSING ✅** |
+| `1_fail_2_pass_3_fail_A` | numbered | 8192 | **empty** — WARN, 37 rehearsed rows dropped |
+| `1_fail_2_pass_3_fail_A` | numbered | 5760 | **21 rows**, 3/3 correct |
+| `1_fail_2_pass_3_fail_A` | plain (documented) | 5758 | **empty** — no WARN |
 
-**The budget does not explain it** — `_F` false-passed at a *lower* budget than the
-clip that succeeded. What separates them is that in the first four the rest of the
-procedure looks complete, and in the last one a second step is visibly missing.
+Three near-identical configurations, three different outcomes: nothing, a
+sevenfold loop with correct verdicts, and nothing again. **On this clip the
+behaviour sits on a knife edge**, and a 2-token change in budget is enough to flip
+it. So "1 of 1 detected" was too generous a reading of a single lucky run; the
+honest version is *1 of 3 attempts produced any verdicts, and that one was right.*
 
-So the failure mode is sharper and more troubling than a resolution limit: **when
-the surrounding procedure appears correct, TVA credits the small step it cannot
-clearly see.** A visibly broken procedure puts it on notice; a nearly-correct one
-does not. For a QA gate that is the worst possible shape, because the realistic
-defect is exactly one missed step in an otherwise clean run.
-
-An earlier version of this README reported "0 of 6" and framed this as an absolute
-blind spot. That was wrong: two of those six returned no verdicts at all rather
-than a false pass, and the double-omission clip was later scored correctly. The
-claim is narrowed accordingly.
+What survives all of this is the part that repeated: **4 of 4 clips where the
+o-ring was the only omission returned a confident false PASS**, at two different
+budgets. That is the finding with consistent support. Whether a corroborating
+second omission genuinely helps is **unresolved** — the one supporting run cannot
+be reproduced, because that clip mostly returns nothing.
 
 #### The reason for a real observation and an invented one are the SAME SENTENCE
 
