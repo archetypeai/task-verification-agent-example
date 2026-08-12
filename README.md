@@ -372,6 +372,39 @@ no generated copy — so the file you edit, the file on the platform and the tex
 model sees cannot drift apart. Provenance for past runs comes from git, where the
 SOP is committed, rather than from the platform's file list.
 
+### A second SOP, for testing whether wording can fix the blind spot
+
+[`sop/oring-strict.txt`](sop/oring-strict.txt) is the same three steps with an
+explicit evidence requirement added to each line:
+
+> Step 1: Install the rubber O-ring into the blue block-off cap. **Report PASSED
+> only if the O-ring is visibly a separate loose part in the hands and is then
+> seated into the cap's groove on camera. If the cap is picked up and used without
+> that fitting action being visible, report MISSING.**
+
+It exists because the baseline SOP produced `PASSED` on **all four** clips where the
+O-ring was never fitted, inventing detail like *"stretching the O-ring"*. If the
+model can be told not to assume, that is the cheapest possible mitigation.
+
+Two things deliberately absent, both from MGA's experience: **no output-format
+instruction** — the results parser owns the template, and a prompt specifying its
+own format makes it return zero steps — and **no numeric torque value**, since
+nothing in a handheld video can evidence a number.
+
+**Read a positive result carefully.** Step 1's confusion matrix is `TN=0`: TVA has
+never been observed correctly rejecting that step. So if the strict SOP yields
+`MISSING`, two explanations fit equally — it started looking for the O-ring, or it
+became pessimistic and would now also fail the six clips where the O-ring *was*
+fitted. Distinguishing them requires running the strict SOP against a `1_pass`
+clip as a control. Trading an invisible false-pass problem for an invisible
+false-fail one is not an improvement.
+
+**Keep SOP files free of comments.** `load_sop()` does strip `#` lines, but a file
+that needs stripping no longer uploads as itself — it uploads as a generated
+normalized copy, reintroducing exactly the drift between the file you edit and the
+bytes the model sees that this design avoids. Put rationale in the README, not in
+the SOP.
+
 ### Where the SOP lives on the wire — and where it does not
 
 **Not in the bundle.** The bundle carries only `values`:
