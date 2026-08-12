@@ -1142,26 +1142,47 @@ python3 evaluate.py reference/grid-5752/*.jsonl
 ### Reproducing it
 
 ```sh
+# Pin EVERY value that affects the result, and the blueprint. These commands must
+# not depend on script defaults — two of those defaults changed while this example
+# was being written, and a reproduction that silently follows them is not a
+# reproduction. The md5s are what the committed outputs in reference/grid-5752/ have.
+
+BP=blp_6dp7cye17f8qct7a9jbzx6yhfy   # the version whose sink can emit output
+
 # easy clip — both SOPs agree: 3 verdicts, 3/3 correct
 python3 run_tva_example.py --video 1_pass_2_pass_3_pass_A --sop sop/oring-numbered.txt \
-    --max-new-tokens 5752 --output grid-easy-numbered.jsonl
+    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
+    --output grid-easy-numbered.jsonl      # 3 rows,  md5 ed8116176e6e…
 python3 run_tva_example.py --video 1_pass_2_pass_3_pass_A --sop sop/oring.txt \
-    --max-new-tokens 5752 --output grid-easy-plain.jsonl
+    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
+    --output grid-easy-plain.jsonl         # 3 rows,  md5 c592168b5c58…
 
 # defect-bearing clip — the SOPs disagree completely
 python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A --sop sop/oring-numbered.txt \
-    --max-new-tokens 5752 --output grid-hard-numbered.jsonl   # 21 rows, 3/3 correct
+    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
+    --output grid-hard-numbered.jsonl      # 21 rows, md5 3ef2d7fb07d8…  3/3 correct
 python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A --sop sop/oring.txt \
-    --max-new-tokens 5752 --output grid-hard-plain.jsonl      # 0 rows
+    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
+    --output grid-hard-plain.jsonl         # 0 rows,  md5 d131e7a67a85…  NO VERDICTS
+
+python3 evaluate.py grid-*.jsonl
 ```
 
-**Pin `--max-new-tokens`.** Left unset, the budget is computed from the SOP's length,
-so the shorter bare SOP would get 5758 and the prefixed one 5752 — the format would
-no longer be the only variable. (Those 6 tokens are provably immaterial: 5752 and
-5758 produce byte-identical output on the easy clip. Pinning removes the question.)
+**Why each pin is there, since none of them is decoration:**
 
-**Pass `--output`.** Two of these four share a clip, and the default output name is
-derived from the clip — so without it the second run silently overwrites the first.
+| pin | without it |
+|---|---|
+| `--blueprint` | follows `BLUEPRINT_DEFAULT`, which this repo will flip to the key `tva` once the sink is fixed — and `tva` currently cannot emit output at all |
+| `--max-new-tokens 5752` | computed from SOP length, so the shorter bare SOP gets 5758 and the format is no longer the only variable |
+| `--max-frames 64`, `--size 224` | script defaults today, but they set the visual token count, which changes the prompt and therefore the generation |
+| `--output` | two cells share a clip and the default name is derived from it, so the second run silently overwrites the first |
+
+**Where 5752 comes from:** it is `8192 − 1568 visual − 731 system − 77 SOP − 64 margin`,
+the largest budget that fits beside the *longer* (numbered) SOP. It is pinned rather
+than computed so both cells get the same number, and because it is what the committed
+digests were produced with. Those 6 tokens are provably immaterial — 5752 and 5758
+give byte-identical output on the easy clip — so the pin is about comparability, not
+correctness.
 
 **Run them one at a time, or check for the skip message.** All four inputs must
 already be on the platform with identical bytes, or a re-upload will destroy a
