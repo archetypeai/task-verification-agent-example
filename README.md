@@ -534,16 +534,20 @@ python3 sweep.py --all --pair-sop          # one SOP per clip, stems matched
 [`sop/paired/`](sop/paired) holds one copy per clip for exactly this, with a
 `regenerate.py --check` that fails if a copy drifts from its source.
 
-**What is verified and what is not.** Every result committed under `reference/` was
-produced with a single shared SOP whose name did *not* match the clip, and the
-verdicts plainly reflect the SOP — *"blue cap"*, *"black manifold"*, *"no wrench is
-shown"*. So a **1:1 run pairs correctly regardless of naming**. Whether the name
-changes the output at all is **untested**; the digests make it a one-run experiment:
+**Tested: for a 1:1 run the filename makes no difference.** The same clip was run
+paired and unpaired at three configurations, and each pair reproduced the other's
+distinctive `rehearsed` count exactly:
 
-| `--pair-sop` on a known config | conclusion |
-|---|---|
-| same digest as the unpaired run | the filename never reaches the prompt — naming is presentational for 1:1 |
-| different digest | the name influences the run, and everything here was gathered unpaired |
+| config | unpaired | paired with matching stem |
+|---|---|---|
+| 64 frames / 5752 | rehearsed **21** | rehearsed **21** |
+| 32 frames / 6536 | rehearsed **0** | rehearsed **0** |
+| 16 frames / 6928 | rehearsed **3** | rehearsed **3** |
+
+Reproducing 21, 0 and 3 respectively is not coincidence — those are fingerprints of
+the generation. **The SOP filename does not reach the model**, so every result
+committed here, all produced with a single shared SOP whose name did not match the
+clip, stands unaffected.
 
 For **multi-input** runs the convention is not optional — it is the only thing that
 can associate a video with its procedure.
