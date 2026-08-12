@@ -175,10 +175,11 @@ Five properties, none of them documented in the blueprint:
 - **Frame indices are SOURCE frames, not sampled frames.** `frame = timestamp ×
   fps` held on every row (810 = 27.0 × 30). Sampled space would have capped at 63
   at `max_frames: 64`.
-- **A `reason` string per step, and it is the most useful field.** It cites what
-  was on screen — and it volunteered *"the blue cap"* without the SOP mentioning
-  colour, which is direct evidence the vision path is doing the work rather than
-  paraphrasing the SOP back.
+- **A `reason` string per step. Do not trust it as evidence.** It reads like a
+  report of what was on screen, and it sometimes is — it volunteered *"the blue
+  cap"* without the SOP mentioning colour. But the reason for a fabricated
+  observation is **word-for-word as confident as one for a real observation** (see
+  the results below), so it cannot distinguish the two.
 - **Unlike MGA, the output does NOT tile the timeline.** MGA segments
   contiguously, so every second must be labelled; TVA emits one row per SOP step
   and the rows can leave gaps. **TVA is verification, not segmentation.**
@@ -679,6 +680,31 @@ PASSES and two as empty results. Not one was caught. (The sixth took four attemp
 to run at all: a missing video object, a missing SOP object, then the token ceiling
 twice. None of those were properties of the clip.)
 
+#### The reason for a real observation and an invented one are the SAME SENTENCE
+
+This is the finding to take away, and it is worse than "sometimes wrong". Compare
+the reason given where the o-ring **was** fitted against one where it **never
+was**:
+
+```
+o-ring WAS fitted    "The video clearly shows the person picking up the O-ring and the
+(1_pass_..._pass_A)   blue cap, then stretching the O-ring over the cap and seating it
+                      properly."
+
+o-ring NEVER fitted  "The video clearly shows the person picking up the blue cap and
+(1_fail_..._pass_B)   O-ring, stretching the O-ring, and placing it onto the cap groove."
+```
+
+Same opening clause. Same *"clearly shows"*. Same *"stretching the O-ring"*. Same
+seating-in-the-groove conclusion. **There is no hedge, no lowered confidence, and
+no linguistic tell** distinguishing the observation from the fabrication.
+
+So the `reason` field — the thing that makes TVA look auditable, and the feature a
+QA reviewer would most want to rely on — **cannot be used as evidence or as a
+confidence signal.** A reviewer reading these two strings cannot tell which one
+describes something that happened. Treat `reason` as a fluent restatement of the
+SOP step, not as a report of what was seen.
+
 #### It does not hedge on the o-ring — it confabulates the action
 
 The three false passes describe, in detail, an installation that never happened:
@@ -864,8 +890,9 @@ Establishes, on 11 scored clips of one task:
 - the mechanics end to end, including the runtime SOP path
 - **an asymmetric, reproducible blind spot** — 0/6 on the small part, 3/3 on the
   tool, across four independent takes of the same omission
-- that the `reason` field can be fluent and wrong, so it cannot be used as a
-  confidence signal
+- that the `reason` field is **indistinguishable** between a real observation and
+  an invented one — the same sentence, the same *"clearly shows"* — so it cannot
+  serve as an audit trail or a confidence signal
 - that the reasoning budget fails on the hardest inputs, and drops verdicts it
   had already formed
 
