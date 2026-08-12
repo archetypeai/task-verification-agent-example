@@ -65,14 +65,33 @@ against the canonical, active blueprint dies at graph instantiation:
 22:19:07  ERROR  pod.terminated  Container agent terminated: Error (exit=1)
 ```
 
-The two blueprints are **byte-identical apart from that one string**:
+**Three consecutive canonical versions have now shipped with it**, over ~18 hours,
+while the only version that can emit output remains the superseded one this repo
+pins:
 
-| | canonical `tva` = `blp_7xfkarv…` | superseded `blp_6dp7cye…` |
-|---|---|---|
-| sink format | `json/per-request` | **`jsonl/per-request`** |
-| `max_new_tokens` default | 8192 | 2048 |
-| nodes, graph, models | identical | identical |
-| result | **exit 1, no output** | **works** |
+| version | published | sink format | `max_new_tokens` default | result |
+|---|---|---|---|---|
+| `blp_6dp7cye…` | 18:27 | **`jsonl/per-request`** | 2048 | **works** — pinned here |
+| `blp_7xfkarv…` | 22:01 | `json/per-request` | 8192 | exit 1, no output |
+| `blp_0tv0wxetd…` | 00:46 | `json/per-request` | 2048 | exit 1, no output |
+| `blp_6yvpfy3mb…` | **12:39** | `json/per-request` | **16384** | exit 1, no output |
+
+Every version is otherwise identical — same nodes, graph, and models. Only the sink
+string and the `max_new_tokens` default move, and **`max_model_len`,
+`repetition_penalty`, `stop` and `min_temporal_similarity_threshold` remain unexposed
+in all four.**
+
+⚠️ **The newest default looks self-inconsistent.** `max_new_tokens: 16384` exceeds
+the measured `max_seq_len` of 8192, and the engine enforces
+`max_new_tokens < max_seq_len`. So either the context window was raised alongside it
+— which would be the fix this document has been asking for — or the shipped default
+is invalid and any run relying on it dies at graph instantiation. The two are
+distinguishable in about a minute of GPU, because the validation error prints the
+current limit:
+
+```sh
+python3 run_tva_example.py --max-new-tokens 999999 --force   # the error reports max_seq_len
+```
 
 Three things make this expensive rather than merely broken:
 
@@ -449,6 +468,53 @@ figure. The format is documented, and the default now follows it.
 because **every committed result was produced with it**, before the example was
 found. Its prefixes double up on the automatic index (`[0] Step 1: …`) with
 disagreeing numbers; whether that cost anything is still untested.
+
+### JSON or JSONL? Both — and it matters when you merge
+
+Three things disagree about this, so it is worth stating plainly:
+
+| | |
+|---|---|
+| the sink format | `jsonl/per-request` |
+| the filename the platform returns | `…__output_<clip>.`**`json`** |
+| the bytes on disk | **one** JSON object, **no trailing newline** |
+
+**JSONL is the format contract, not a description of these files.**
+`jsonl/per-request` means *one JSON record per request* — and a run here processes
+one video, so there is exactly one record, byte-identical to plain JSON. The `l`
+only materialises when a run has several source inputs, where you get one line per
+input. This repo names its copies `.jsonl` after the sink format; the platform's
+`.json` is why an earlier version of `--collect` saved files as
+`<clip>.json.jsonl`.
+
+**The extension is not derived from the sink format, and it changed mid-session.**
+The same pinned blueprint, with `format: jsonl/per-request` throughout, emitted
+both:
+
+| run | UTC | emitted |
+|---|---|---|
+| `agt_7xa5n8yy…` | 21:46 | `…_1_pass_2_pass_3_pass_A.`**`jsonl`** |
+| `agt_2jcbx7ka…` | 23:37 | `…_1_pass_2_pass_3_pass_A.`**`json`** |
+
+Nothing caller-side differed. And the declared format does not predict the
+extension in either agent: `mga` declares `json/per-request` and emitted `.jsonl`
+at 19:57, while `tva` declares `jsonl/per-request` and emitted `.jsonl` then
+`.json`.
+
+**Confirmed: the two agents do not use different formats by design.** MGA now
+emits `.json` too, so its earlier `.jsonl` artifact predates a platform-side change
+that both agents follow. The apparent "TVA uses JSON, MGA uses JSONL" difference
+was an artefact of comparing runs from either side of that change.
+
+Two consequences: **do not key anything off the output extension** (match on
+`__output_` and strip whatever suffix is there — `--collect` does), and treat the
+`format` value as a contract about record structure rather than about filenames.
+
+The consequence is a real trap. **Because there is no trailing newline,
+concatenating outputs corrupts them:**
+
+```
+cat out_A.jsonl out_B.jsonl > merged.jsonl   # ONE line, two objects, parses as neither
 
 ### What the system message already demands
 
