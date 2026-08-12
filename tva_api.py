@@ -296,6 +296,52 @@ def check_sink(doc: dict) -> str | None:
     return None
 
 
+# The model's total context in this deployment. NOT exposed as a bundle value, and
+# the prompt and the generation budget must both fit inside it:
+#
+#   estimated prompt 2368 tokens + 8191 reserved for generation exceeds
+#   max_seq_len=8192; use fewer frames or raise max_seq_len / lower max_new_tokens
+#
+# `max_new_tokens` is RESERVED UP FRONT, so it is not a cap on what may be
+# generated — it is subtracted from the window before generation starts. The check
+# fires at fusion time, AFTER ~7 minutes of model loading.
+MAX_SEQ_LEN = 8192
+
+# Vision token arithmetic for the preprocessor defaults (patch 16, merge 2,
+# temporal patch 2, size 224): each temporal step is (224/16/2)^2 = 49 tokens, and
+# frames are paired into steps. Calibrated against the platform's own figure of
+# 2368 tokens for max_frames=64, which implies ~800 tokens of system + SOP text.
+VISION_TOKENS_PER_STEP = 49
+TEXT_TOKEN_OVERHEAD = 800
+
+
+def estimate_prompt_tokens(max_frames: int, size: int = 224) -> int:
+    """Estimate the prompt's token cost, to check it against MAX_SEQ_LEN."""
+    per_step = (size // 16 // 2) ** 2
+    steps = max(1, max_frames // 2)
+    return steps * per_step + TEXT_TOKEN_OVERHEAD
+
+
+def check_token_budget(max_frames: int, max_new_tokens: int,
+                       size: int = 224) -> str | None:
+    """Return a message if prompt + generation cannot fit in the context window.
+
+    Worth doing client-side because the platform checks it at fusion time — after
+    whisper and newton-fusion have both loaded, so a violation costs the full
+    ~7-minute cold start and produces no output.
+    """
+    prompt = estimate_prompt_tokens(max_frames, size)
+    if prompt + max_new_tokens <= MAX_SEQ_LEN:
+        return None
+    usable = MAX_SEQ_LEN - prompt
+    return (f"prompt (~{prompt} tokens at max_frames={max_frames}, size={size}) + "
+            f"max_new_tokens ({max_new_tokens}) exceeds max_seq_len="
+            f"{MAX_SEQ_LEN}.\n"
+            f"    The run would die at fusion time, after ~7 min of model loading.\n"
+            f"    At max_frames={max_frames}, max_new_tokens must be <= {usable}. "
+            f"Lower it, or use fewer frames.")
+
+
 def create_bundle(blueprint: str, name: str, values: dict) -> dict:
     """POST /agents/bundles — note the PLURAL. The singular form 404s."""
     return request("POST", f"{agents_base()}/bundles",

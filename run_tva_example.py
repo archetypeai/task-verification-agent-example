@@ -289,7 +289,7 @@ def main() -> None:
                          "frame every 1.9 s. 64 is also the reader and "
                          "preprocessor batch size, so they land in one batch. "
                          "(default: 64)")
-    ap.add_argument("--max-new-tokens", type=int, default=8191,
+    ap.add_argument("--max-new-tokens", type=int, default=5120,
                     help="output budget, capped by max_seq_len. MUST BE STRICTLY "
                          "BELOW max_seq_len, which is 8192 in this deployment and "
                          "is NOT exposed — 8192 is rejected at graph "
@@ -364,6 +364,12 @@ def main() -> None:
               f"silently ignored.")
     # The expensive one: a sink the platform cannot instantiate wastes the whole
     # cold start before failing. Catch it here, for free.
+    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens)
+    if budget_warning:
+        print(f"  ** {budget_warning}")
+        if not args.force:
+            sys.exit("refusing to start a run that cannot fit in the context "
+                     "window. Pass --force to do it anyway.")
     sink_warning = api.check_sink(doc)
     if sink_warning:
         print(f"  ** {sink_warning}")

@@ -410,7 +410,7 @@ Only two values are worth setting, and both are honoured:
 | Value | This example sends | Honoured? | Notes |
 |---|---|---|---|
 | `max_frames` | **64** | ✅ | Blueprint default is 16 — on a 30 s clip that is one frame every 1.9 s. 64 is also the reader/preprocessor batch size, so frames land in one batch. |
-| `max_new_tokens` | **8192** | ✅ | **Not cosmetic — see below.** At 2048 the clips that matter return nothing at all. |
+| `max_new_tokens` | **5120** | ✅ | **Reserved up front, so `prompt + this <= 8192`.** At `max_frames: 64` the ceiling is 5,824 — 8192 and 8191 both fail, at different stages. At 2048 the clips that matter return nothing. See below. |
 | `size` | not sent (224) | ✅ | Every frame is resized to 224×224, so 1080p clips are no better than 480p — only slower to upload. |
 | `prompt` | **does not exist** | — | Not a defect to work around, just absent. The SOP replaces it. |
 
@@ -419,7 +419,7 @@ value that is not wired is caught before spending GPU:
 
 ```
   max_frames       64       -> honoured   (blueprint default: 16)
-  max_new_tokens   8192     -> honoured   (blueprint default: 8192)
+  max_new_tokens   5120     -> honoured   (blueprint default: 2048)
 ```
 
 ### `max_new_tokens` is the one value that decides whether you get an answer
@@ -651,34 +651,56 @@ The answer existed; the harness threw it away. Note also 1174 s of runtime for a
 21-second clip — the reasoning is where the time goes.
 
 **And "raise `max_new_tokens`" does not fix it**, which is what the platform's own
-warning suggests and what an earlier version of this README said. The engine
-enforces:
+warning suggests and what an earlier version of this README said. Two separate
+checks bound it, and they fire at different times:
 
 ```
-ERROR  instantiating graph: invalid node config: max_new_tokens (8192) must be below
-       max_seq_len (8192): the prompt and the generated tokens must fit within max_seq_len
+# at graph instantiation, ~40 s in (after whisper loads)
+ERROR  invalid node config: max_new_tokens (8192) must be below max_seq_len (8192)
+
+# at fusion time, ~7 MINUTES in (after newton-fusion loads)
+ERROR  preparing Newton request: estimated prompt 2368 tokens + 8191 reserved for
+       generation exceeds max_seq_len=8192; use fewer frames or raise max_seq_len /
+       lower max_new_tokens
 ```
 
-So **`max_seq_len` is 8192, it is not exposed as a bundle value, and the prompt
-shares it with generation.** The arithmetic at the settings used here:
+So **`max_new_tokens` is RESERVED UP FRONT**, not a cap on what may be produced:
+the real rule is `prompt + max_new_tokens <= max_seq_len`, with `max_seq_len` at
+**8192** and not exposed as a bundle value. The prompt is measured, so the ceiling
+is computable:
 
-| | tokens |
-|---|---|
-| visual, `max_frames: 64` → 32 temporal steps × 49 | **1,568** |
-| SOP + system text | ~200 |
-| **left for `<think>` + verdicts** | **~6,400** |
-| `max_frames: 32` would leave | ~7,200 |
-| `max_frames: 16` would leave | ~7,600 |
+| `max_frames` | prompt (tokens) | max usable `max_new_tokens` |
+|---|---|---|
+| 16 | ~1,192 | **7,000** |
+| 32 | ~1,584 | 6,608 |
+| **64** (used here) | **2,368** (platform's own figure) | **5,824** |
+| 128 | ~3,936 | 4,256 |
 
-Those two clips needed more than ~6,400 tokens of reasoning, and **no caller-side
-setting can give them that** — 8191 is the maximum accepted value and dropping to
-16 frames buys only 18% more headroom, at the cost of temporal resolution. The
-budget was never the constraint; **the context window is.**
+The two clips that returned nothing needed more reasoning than ~5,800 tokens, and
+**no caller-side setting provides that.** The frames/budget trade-off is not a free
+lever either: dropping to 16 frames buys 1,176 more generation tokens but samples a
+21-second clip every 1.3 s instead of every 0.33 s.
+
+`tva_api.check_token_budget()` computes this client-side and refuses in about a
+second, because the second check above costs the full cold start:
+
+```
+** prompt (~2368 tokens at max_frames=64, size=224) + max_new_tokens (8191)
+   exceeds max_seq_len=8192.
+   At max_frames=64, max_new_tokens must be <= 5824. Lower it, or use fewer frames.
+refusing to start a run that cannot fit in the context window.
+```
 
 This is also a 32× divergence from the design doc, which motivates its
 preprocessing work with F1-0's **256K** context window (MGA's example measured a
 video at "0.15% of F1-0's 256K window"). Whatever this deployment serves,
 `max_seq_len` is **8192**.
+
+⚠️ **The rules tightened mid-session.** Nine clips ran at `max_new_tokens: 8192`
+between 23:37 and 02:47 and produced output; at 03:58 the same value was rejected
+at graph instantiation, and 8191 then failed at fusion time. Same pinned
+blueprint — the node schema and the request-preparation check changed underneath.
+The scripts default to **5120**, comfortably inside the 5,824 ceiling.
 
 Combined with the false passes above: **the clips that exhaust the context are the
 same clips that contain the most defects.** Difficulty, reasoning length and defect

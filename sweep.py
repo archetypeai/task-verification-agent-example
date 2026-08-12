@@ -218,7 +218,7 @@ def main() -> None:
                          f"The key 'tva' currently resolves to a blueprint whose "
                          f"sink cannot be instantiated — see the README.")
     ap.add_argument("--max-frames", type=int, default=64)
-    ap.add_argument("--max-new-tokens", type=int, default=8191,
+    ap.add_argument("--max-new-tokens", type=int, default=5120,
                     help="output budget (default 8192). At 2048 a clip with a "
                          "skipped step exhausted the budget inside the model's "
                          "<think> block and returned results:[] — see the README.")
@@ -330,6 +330,9 @@ def main() -> None:
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
     if inert:
         print(f"  WARNING: {inert} is not wired and will be silently ignored.")
+    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens)
+    if budget_warning:
+        sys.exit(f"REFUSING TO RUN: {budget_warning}")
     sink_warning = api.check_sink(bp["document"])
     if sink_warning:
         # Refuse rather than warn: a sweep would repeat the same doomed cold
