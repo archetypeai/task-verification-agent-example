@@ -261,8 +261,35 @@ def show(path: str, video: str | None = None) -> None:
     for rec in records:
         results = rec.get("results", [])
         rid = rec.get("id", "?")
-        print(f"\nverification report for {rid} — {len(results)} of "
-              f"{len(load_sop()) if os.path.exists(DEFAULT_SOP_PATH) else len(results)} SOP steps reported")
+        # The model sometimes LOOPS, re-emitting the whole verdict block, and the
+        # parser keeps every match — 21 rows for a 3-step SOP has been observed.
+        # Dumping all of them buries the answer, so collapse for display and say
+        # what was collapsed. Placeholder rows (reason "...", no interval) are the
+        # skeleton block and are not verdicts; drop them if a real row exists.
+        distinct, order = {}, []
+        for r in results:
+            key = r.get("step")
+            placeholder = str(r.get("reason") or "").strip() in ("", "...", "\u2026")
+            prev = distinct.get(key)
+            if prev is None:
+                distinct[key] = r
+                order.append(key)
+            elif placeholder:
+                continue
+            elif str(prev.get("reason") or "").strip() in ("", "...", "\u2026"):
+                distinct[key] = r          # a real row beats a placeholder
+        shown = [distinct[k] for k in order]
+        print(f"\nverification report for {rid} — {len(shown)} step(s)")
+        if len(results) > len(shown):
+            n_ph = sum(1 for r in results
+                       if str(r.get("reason") or "").strip() in ("", "...", "\u2026"))
+            print(f"  NOTE: the model emitted {len(results)} rows for "
+                  f"{len(shown)} step(s) — it looped, and the parser kept every\n"
+                  f"  repetition ({len(results) // max(1, len(shown))} blocks"
+                  + (f", {n_ph} placeholder row(s) with no reason" if n_ph else "")
+                  + "). Collapsed below; the\n"
+                  f"  duplicates were identical. See the README on repetition.")
+        results = shown
         if not results:
             print("  NO STEPS PARSED — the run reported job.completed and "
                   "returned an empty results list.\n"
