@@ -158,10 +158,22 @@ def upload_file(path: str, rename: str | None = None) -> str:
         req.add_header("Content-Length", str(len(preamble) + size + len(epilogue)))
         try:
             with urllib.request.urlopen(req, timeout=900) as resp:
-                return json.loads(resp.read())["file_id"]
+                out = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             sys.exit(f"upload of {path} failed ({e.code}): "
                      f"{e.read().decode(errors='replace')}")
+    # A 2xx is not enough. The response carries its own `is_valid` flag, and an
+    # upload that reports valid=false here — or returns no file_id — would
+    # otherwise be discovered ~13 minutes later, inside the run, as
+    # `S3 object not found`. That happened once on this dataset: one clip 404'd on
+    # /files/download afterwards while its siblings were fine, so the object never
+    # persisted even though the client had a file_id in hand.
+    if not out.get("is_valid", True) or not out.get("file_id"):
+        sys.exit(f"upload of {path} was rejected by the files API: "
+                 f"{json.dumps(out)}\n"
+                 f"  Nothing downstream will work — the run would fail with "
+                 f"'S3 object not found' about 13 minutes in.")
+    return out["file_id"]
 
 
 def upload_text(text: str, name: str) -> str:

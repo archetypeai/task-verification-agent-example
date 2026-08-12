@@ -36,6 +36,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -142,8 +143,14 @@ def collect(out_dir: str, bundle_id: str | None = None,
             terminal = bool(rows) and str(rows[-1].get("event_type")) in api.TERMINAL_EVENTS
             if errors:
                 dead += 1
-                print(f"  {aid}  FAILED     no results, and it will not produce any:")
-                print(f"      {str(errors[0].get('message'))[:150]}")
+                msg = str(errors[0].get("message"))
+                # Lead with the CLIP, not the agent id: "which one failed?" is the
+                # first question, and the name is otherwise buried mid-message
+                # behind a long s3:// URI.
+                m = re.search(r'"([^"]+\.(?:mp4|mkv|webm|mov|m4v|avi))"', msg)
+                who = m.group(1) if m else "(clip not named in the error)"
+                print(f"  FAILED  {who}  ({aid})")
+                print(f"      it will not produce output. cause: {msg[:200]}")
             elif terminal:
                 dead += 1
                 print(f"  {aid}  FINISHED   no results — terminal "
@@ -211,7 +218,7 @@ def main() -> None:
                          f"The key 'tva' currently resolves to a blueprint whose "
                          f"sink cannot be instantiated — see the README.")
     ap.add_argument("--max-frames", type=int, default=64)
-    ap.add_argument("--max-new-tokens", type=int, default=8192,
+    ap.add_argument("--max-new-tokens", type=int, default=8191,
                     help="output budget (default 8192). At 2048 a clip with a "
                          "skipped step exhausted the budget inside the model's "
                          "<think> block and returned results:[] — see the README.")

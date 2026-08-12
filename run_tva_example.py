@@ -289,14 +289,15 @@ def main() -> None:
                          "frame every 1.9 s. 64 is also the reader and "
                          "preprocessor batch size, so they land in one batch. "
                          "(default: 64)")
-    ap.add_argument("--max-new-tokens", type=int, default=8192,
-                    help="output budget (default 8192). NOT cosmetic: f1-0 emits "
-                         "a <think> reasoning block first, and at 2048 a clip "
-                         "with a SKIPPED step ran out of budget inside that "
-                         "block, so the parser dropped everything and the run "
-                         "returned results:[] while reporting job.completed. "
-                         "Clean all-pass clips fit in 2048; the interesting ones "
-                         "do not. 8192 is also the current blueprint default.")
+    ap.add_argument("--max-new-tokens", type=int, default=8191,
+                    help="output budget, capped by max_seq_len. MUST BE STRICTLY "
+                         "BELOW max_seq_len, which is 8192 in this deployment and "
+                         "is NOT exposed — 8192 is rejected at graph "
+                         "instantiation. The prompt (video frames + SOP) and the "
+                         "generated tokens SHARE that 8192, so at max_frames=64 "
+                         "only ~6400 remain for the model's <think> block plus the "
+                         "verdicts. Raising this cannot buy more than the ceiling "
+                         "allows. (default: 8191, the maximum accepted)")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"text file of SOP steps, one per line "
                          f"(default: {DEFAULT_SOP_PATH}). The SOP is the ONLY "

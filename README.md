@@ -586,11 +586,10 @@ resized to 224×224, which is the more likely culprit.
 what the clips contain (omissions, not botched attempts), so the status choice is
 correct; it also means nothing here exercises `FAILED`.
 
-#### 8192 tokens is still not always enough
+#### The real ceiling is `max_seq_len: 8192`, and it is not exposed
 
-Two clips returned `results: []` at 8192, and both are `1_fail` clips. The log on
-the hardest one — both steps 1 and 3 skipped — is the most revealing line in this
-whole example:
+Two clips returned `results: []`, both `1_fail` clips. The log on the hardest one —
+both steps 1 and 3 skipped — is the most revealing line in this whole example:
 
 ```
 WARN  TaskVerificationResultsParserNode: generation ended inside the model's reasoning
@@ -602,10 +601,46 @@ was discarded**, because the closing `</think>` never arrived within the budget.
 The answer existed; the harness threw it away. Note also 1174 s of runtime for a
 21-second clip — the reasoning is where the time goes.
 
-Combined with the false passes above: **the clips that defeat the token budget are
-the same clips that contain the most defects.** Difficulty, reasoning length and
-defect count all move together, so the failures cluster precisely where a
-verification agent is supposed to earn its keep.
+**And "raise `max_new_tokens`" does not fix it**, which is what the platform's own
+warning suggests and what an earlier version of this README said. The engine
+enforces:
+
+```
+ERROR  instantiating graph: invalid node config: max_new_tokens (8192) must be below
+       max_seq_len (8192): the prompt and the generated tokens must fit within max_seq_len
+```
+
+So **`max_seq_len` is 8192, it is not exposed as a bundle value, and the prompt
+shares it with generation.** The arithmetic at the settings used here:
+
+| | tokens |
+|---|---|
+| visual, `max_frames: 64` → 32 temporal steps × 49 | **1,568** |
+| SOP + system text | ~200 |
+| **left for `<think>` + verdicts** | **~6,400** |
+| `max_frames: 32` would leave | ~7,200 |
+| `max_frames: 16` would leave | ~7,600 |
+
+Those two clips needed more than ~6,400 tokens of reasoning, and **no caller-side
+setting can give them that** — 8191 is the maximum accepted value and dropping to
+16 frames buys only 18% more headroom, at the cost of temporal resolution. The
+budget was never the constraint; **the context window is.**
+
+This is also a 32× divergence from the design doc, which motivates its
+preprocessing work with F1-0's **256K** context window (MGA's example measured a
+video at "0.15% of F1-0's 256K window"). Whatever this deployment serves,
+`max_seq_len` is **8192**.
+
+Combined with the false passes above: **the clips that exhaust the context are the
+same clips that contain the most defects.** Difficulty, reasoning length and defect
+count all move together, so the failures cluster precisely where a verification
+agent is supposed to earn its keep — and the fix is not available to the caller.
+
+⚠️ **`max_new_tokens: 8192` was accepted during this sweep and is rejected now.**
+Nine clips ran at 8192 between 23:37 and 02:47; a run at 03:58 died at graph
+instantiation on the `must be below max_seq_len` check, on the same pinned
+blueprint. The node schema changed underneath, not the blueprint. The scripts
+default to **8191**.
 
 #### One infrastructure failure, reported as a completed job
 
@@ -747,10 +782,12 @@ Observations for the author, not defects.
    `rows_emitted: 0` field, would stop a silent empty result reading as success.
    This matters more for TVA than for MGA because the overflow correlates with the
    inputs that contain defects.
-5. **Consider a separate reasoning budget, or reserving tokens for the answer.**
-   Sharing one budget between `<think>` and the verdicts means a harder judgement
-   can cost you the answer entirely. Reserving enough for N rows would fail
-   gracefully — truncated reasoning, verdicts intact.
+5. **Raise `max_seq_len`, or expose it.** At 8192 total, with ~1,600 spent on a
+   64-frame prompt, a hard clip cannot fit its reasoning and there is nothing the
+   caller can do — 8191 is the maximum accepted `max_new_tokens` and fewer frames
+   buys little. The design doc describes a 256K context; this deployment serves
+   8192. Failing that, reserve tokens for the answer so truncated reasoning still
+   yields verdicts.
 6. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section
    is the temporal compression algorithm, with a documented 70% compression and
    25% performance gain, and none of it is reachable from a bundle.
