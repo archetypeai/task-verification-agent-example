@@ -206,9 +206,31 @@ Five properties, none of them documented in the blueprint:
 
   | lever | status |
   |---|---|
+  | **arity validation against the SOP** | ❌ — the pipeline *has* the step count and does not use it |
   | `repetition_penalty` | ❌ not exposed on `tva` — was wired on MGA's superseded `blp_76kyqm…` |
   | `stop` | ❌ same |
   | parser halting after one complete block | platform-side |
+
+  The first is the cheapest and most surprising gap: `PrepareSOPNode` accumulates a
+  known number of SOP lines, and `TaskVerificationResultsParserNode` independently
+  regex-matches verdict lines and emits every match. **Nothing compares the two.**
+  A 3-step SOP returning 21 rows is self-evidently wrong and could be caught — or
+  at least flagged — inside the pipeline.
+
+  When it duplicates is also patterned, though on few observations:
+
+  | clip | at 8192 | at a reduced budget |
+  |---|---|---|
+  | all steps correct | 1 block | 1 block |
+  | o-ring omitted | 1 block, or empty | **3 blocks** |
+  | o-ring **and** wrench omitted | empty | **7 blocks** |
+
+  Duplication has only appeared on clips **containing an omission**, and only below
+  8192; all-pass clips have never duplicated at any budget, including the one where
+  this clip produced seven blocks. Multiplicity tracks the number of omissions.
+  That fits a model less certain when asserting an absence and re-deriving its
+  answer — but it is two duplicating runs, so treat it as a correlation with a
+  plausible story rather than a demonstrated mechanism.
 
 - `.env` in the repo root:
 
@@ -1073,8 +1095,10 @@ Observations for the author, not defects.
 2. **Validate the graph before loading models, not after.** A blueprint that
    cannot instantiate currently costs the full ~7-minute cold start; connector and
    node-config validation up front turns 996 s into about 1 s.
-3. **Expose `repetition_penalty` and `stop`, and halt the parser after one
-   complete block.** The model loops: one run re-emitted the same 3-verdict block
+3. **Validate the output's arity against the SOP, and expose `repetition_penalty`
+   and `stop`.** A 3-step SOP returned 21 rows. The pipeline knows the step count —
+   `PrepareSOPNode` built the instruction from it — and the parser never compares
+   the two, so a self-evidently wrong result passes through as data. The model loops: one run re-emitted the same 3-verdict block
    six extra times (~788 tokens, 14% of its budget), and the same clip at a higher
    budget looped ~12 times inside `<think>` and produced nothing. That makes
    repetition the likely cause of the empty results rather than a cosmetic quirk,
