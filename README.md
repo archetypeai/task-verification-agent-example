@@ -401,6 +401,67 @@ normalized copy, reintroducing exactly the drift between the file you edit and t
 bytes the model sees that this design avoids. Put rationale in the README, not in
 the SOP.
 
+### The SOP has an expected format, and it is in the design doc
+
+The doc is explicit that this matters:
+
+> *"the specific details and format of the system and instruction are important and
+> **should not be arbitrarily set or modified**"*
+
+and its golden reference (extracted from the doc's own figure, committed as
+[`reference/doc-sop-instruction-format.png`](reference/doc-sop-instruction-format.png))
+is two lines:
+
+```python
+steps = [f"[{index}] {sop_step}" for index, sop_step in enumerate(video_sop_steps)]
+instruction = f"Steps: {steps}"
+```
+
+**The pipeline adds its own `[index]`, and `enumerate` makes it 0-based.** The
+system message
+([`reference/doc-system-message.png`](reference/doc-system-message.png)) then
+instructs the model in the same scheme:
+
+> *"where N is the step's number written as a plain integer **starting at 0** (the
+> first step is `step 0:`, the second is `step 1:`…)"*
+
+So a step should arrive as bare text. **The SOP shipped here does not** — it carries
+its own `Step N:` prefix, one-based, giving three colliding schemes:
+
+| source | numbering |
+|---|---|
+| `PrepareSOPNode` (automatic) | `[0]` `[1]` `[2]` |
+| system message (instructed) | `step 0:` `step 1:` `step 2:` |
+| **`sop/oring.txt` (ours)** | **`Step 1:` `Step 2:` `Step 3:`** |
+
+The model therefore receives `[0] Step 1: Install the rubber O-ring…` —
+double-numbered, with the two numbers disagreeing.
+[`sop/oring-plain.txt`](sop/oring-plain.txt) is the same procedure without the
+prefixes, matching the golden format. **Which wording is better is untested here**;
+the prefixes were added before the golden reference was known, and the 12-clip
+results were all produced with them.
+
+### What the system message already demands
+
+Reading it changes how to interpret two findings above — they are the model
+**disobeying explicit instructions**, not merely behaving oddly:
+
+| the system message says | what was observed |
+|---|---|
+| *"Mark a step PASSED only if it is **clearly shown** being carried out"* | four false PASSES on an o-ring never fitted |
+| *"one line each, and **output nothing else**"* | 21 rows for a 3-step SOP |
+| *"mark it MISSING if it is not shown at all"* | correct when it fires — 3/3 on the wrench |
+
+It also confirms two things this example had inferred from behaviour: `MISSING`
+carries no timestamps by design, and *"It is OK if there are temporal gaps between
+the steps"* — so TVA genuinely does not tile the timeline, unlike MGA.
+
+And it explains why the stricter SOP returned zero rows. That SOP added *"Report
+PASSED only if…"* clauses — **competing with instructions the system message
+already gives**, in a format the doc warns not to modify. The lesson is sharper
+than "do not specify output format": the system message has already covered
+status semantics, so an SOP repeating them can only conflict.
+
 ### Where the SOP lives on the wire — and where it does not
 
 **Not in the bundle.** The bundle carries only `values`:
