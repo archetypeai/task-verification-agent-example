@@ -133,30 +133,40 @@ STATUSES = ("PASSED", "FAILED", "MISSING")
 # --repro-empty: a run that reports success and returns no verdicts at all.
 # `job.completed`, no ERROR row, an empty `results` list.
 #
-# THE BUDGET IS DELIBERATELY AT ITS MAXIMUM HERE. An earlier version of this mode
-# pinned max_new_tokens: 2048 to force the failure, which reproduced it but taught
-# the wrong lesson — that raising the budget is the fix. It is not. The two clips
-# that returned empty in the 12-clip sweep were running at the CEILING already
-# (they asked for 8192, and the engine gave them everything left after the prompt),
-# and this mode reproduces that: the budget is computed as the most the context
-# window allows, and the clip still comes back with nothing.
+# WHAT THIS REPRODUCES, and what it does not. Raising the budget is NOT a general
+# fix — two clips returned empty at the ceiling in the 12-clip sweep — but a low
+# budget is what reproduces it ON DEMAND, and a reproduction has to be reliable.
 #
-# The clip is what makes it fail. This one has BOTH step 1 and step 3 skipped, and
-# the model reasons far longer about absences than about a clean pass — its log
-# reported `dropping 37 rehearsed row(s)`, meaning it had formed 37 candidate
-# verdicts inside <think> and every one was discarded when the budget ran out
-# before `</think>`. A clip where every step was performed correctly fits easily
-# and will NOT reproduce this.
+# The root pathology is REPETITION: the model emits the verdict block over and
+# over. Whether that surfaces as nothing or as sevenfold duplication depends on
+# which side of `</think>` the budget runs out on:
+#
+#   1_fail_2_pass_3_fail_A at 8192  -> looped inside <think>, never closed:
+#                                      "dropping 37 rehearsed row(s)", 0 rows out
+#   1_fail_2_pass_3_fail_A at 5760  -> closed <think>, then looped in the answer:
+#                                      21 rows, all CORRECT, 7 blocks of 3
+#   1_pass_2_pass_3_fail_A at 2048  -> runs out inside <think>: 0 rows  <- this mode
+#
+# So do not read a small budget as "the cause". It is the reliable trigger for the
+# empty presentation of a pathology that also occurs at the ceiling.
 REPRO = {
-    "video": "data/clips/1_fail_2_pass_3_fail_A.mp4",
+    "video": "data/clips/1_pass_2_pass_3_fail_A.mp4",
     "max_frames": 64,
     "size": 224,
-    "max_new_tokens": None,      # None -> the computed maximum. See above.
+    # 2048 rather than the ceiling, and this was learned the hard way. An earlier
+    # version used the computed maximum on 1_fail_2_pass_3_fail_A, reasoning that
+    # reproducing the failure at the ceiling was the honest configuration. It does
+    # not reproduce: that clip at 5760 returns 21 rows of CORRECT verdicts. The
+    # underlying pathology is repetition — the model emits the verdict block over
+    # and over — and whether you get nothing or sevenfold depends on which side of
+    # `</think>` the budget runs out on. 2048 lands inside the reasoning block
+    # reliably on this clip, which is what a reproduction needs to do.
+    "max_new_tokens": 2048,
 }
 # What that clip produced in the sweep, committed so the failure is inspectable
 # offline with no API key.
-REPRO_REFERENCE = "reference/sweep/tva-output-1_fail_2_pass_3_fail_A.jsonl"
-REPRO_EXPECTED_MD5 = "d131e7a67a858a0968483a9414dda982"
+REPRO_REFERENCE = "reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl"
+REPRO_EXPECTED_MD5 = "1b56135df5d1476c625e6aedfd18b91b"
 
 # The avoidable variant, kept only so the contrast is available:
 #   python3 run_tva_example.py --repro-empty --max-new-tokens 2048
@@ -455,31 +465,33 @@ def main() -> None:
         args.video = REPRO["video"]
         args.max_frames = REPRO["max_frames"]
         args.size = REPRO["size"]
+        # The repro's own budget wins unless the caller set one explicitly, so
+        # --repro-empty is self-contained and --max-new-tokens still overrides it.
         if args.max_new_tokens is None:
-            args.max_new_tokens = api.max_usable_new_tokens(args.max_frames,
-                                                            args.size)
+            args.max_new_tokens = REPRO["max_new_tokens"] or \
+                api.max_usable_new_tokens(args.max_frames, args.size,
+                                          sop=args.sop)
         ceiling = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
         at_ceiling = args.max_new_tokens >= ceiling
         print(f"\nREPRODUCING THE EMPTY-OUTPUT FAILURE\n"
               f"  clip            {os.path.basename(REPRO['video'])}\n"
-              f"                  steps 1 AND 3 skipped — no o-ring, no wrench\n"
+              f"                  step 3 skipped — the wrench never appears\n"
               f"  max_new_tokens  {args.max_new_tokens}"
               f"{'   <-- the MAXIMUM the context window allows' if at_ceiling else '   (below the ceiling of %d)' % ceiling}\n"
               f"  max_frames      {args.max_frames}, size {args.size}\n"
               f"  SOP             {args.sop or DEFAULT_SOP_PATH} (unmodified)\n\n"
               f"  Expect: job.completed, NO ERROR row, and results: [] — ~44 bytes.\n")
-        if at_ceiling:
-            print("  READ THIS: the budget is already as high as it can go. There is\n"
-                  "  no caller-side setting that fixes this run — a larger budget is\n"
-                  "  rejected, and raising `size` or `max_frames` makes it worse by\n"
-                  "  taking tokens from the same window. The model reasons longer\n"
-                  "  about absences than about a clean pass, and this clip has two.\n"
-                  "  An all-correct clip fits easily and will NOT reproduce this.\n")
-        else:
-            print("  NOTE: you have set a budget below the ceiling, which reproduces\n"
-                  "  the AVOIDABLE version — that one really is fixed by raising\n"
-                  "  --max-new-tokens. Drop the flag to reproduce the version that\n"
-                  "  cannot be fixed from a bundle.\n")
+        print(f"  A low budget is the RELIABLE TRIGGER, not the root cause. The\n"
+              f"  underlying pathology is repetition: the model emits the verdict\n"
+              f"  block over and over, and where the budget runs out decides what\n"
+              f"  you see. Measured on 1_fail_2_pass_3_fail_A:\n"
+              f"      at 8192  looped inside <think>, never closed -> 0 rows\n"
+              f"               (log: 'dropping 37 rehearsed row(s)')\n"
+              f"      at 5760  closed <think>, looped in the answer -> 21 rows,\n"
+              f"               7 identical blocks of 3, all verdicts CORRECT\n"
+              f"  So raising the budget is not a fix — it changes the presentation.\n"
+              f"  The ceiling here is {ceiling}; this run uses "
+              f"{args.max_new_tokens}.\n")
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 

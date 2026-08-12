@@ -670,15 +670,39 @@ status distribution: PASSED=26, FAILED=0, MISSING=3
 two that behave completely differently, and the difference between them is the
 whole result:
 
-| omitted step | what is missing on screen | detections |
-|---|---|---|
-| **step 3 — the wrench** | a large steel tool that never enters frame | **3 of 3** ✅ |
-| **step 1 — the o-ring** | a ~10 mm black ring, absent from a hand movement | **0 of 6** ❌ |
+| omission | detections |
+|---|---|
+| **the wrench** — a large steel tool that never enters frame | **3 of 3** ✅ |
+| **the o-ring, when it is the ONLY thing missing** | **0 of 4** ❌ |
+| **the o-ring, when the wrench is ALSO missing** | **1 of 1** ✅ |
 
-**Every single clip where the o-ring was skipped went undetected** — four as false
-PASSES and two as empty results. Not one was caught. (The sixth took four attempts
-to run at all: a missing video object, a missing SOP object, then the token ceiling
-twice. None of those were properties of the clip.)
+**The pattern is not "TVA cannot see the o-ring."** A later run detected it
+correctly, with a precise reason — *"The installation of the O-ring into the blue
+cap is not shown in the video."* What predicts failure is whether the omission is
+**isolated**:
+
+| clip | skipped | budget | step-1 verdict |
+|---|---|---|---|
+| `1_fail_2_pass_3_pass_A` | o-ring only, wrench used | 8192 | PASSED ❌ |
+| `1_fail_2_pass_3_pass_B` | o-ring only, wrench used | 8192 | PASSED ❌ |
+| `1_fail_2_pass_3_pass_E` | o-ring only, wrench used | 8192 | PASSED ❌ |
+| `1_fail_2_pass_3_pass_F` | o-ring only, wrench used | **5120** | PASSED ❌ |
+| `1_fail_2_pass_3_fail_A` | o-ring **and** wrench | 5760 | **MISSING ✅** |
+
+**The budget does not explain it** — `_F` false-passed at a *lower* budget than the
+clip that succeeded. What separates them is that in the first four the rest of the
+procedure looks complete, and in the last one a second step is visibly missing.
+
+So the failure mode is sharper and more troubling than a resolution limit: **when
+the surrounding procedure appears correct, TVA credits the small step it cannot
+clearly see.** A visibly broken procedure puts it on notice; a nearly-correct one
+does not. For a QA gate that is the worst possible shape, because the realistic
+defect is exactly one missed step in an otherwise clean run.
+
+An earlier version of this README reported "0 of 6" and framed this as an absolute
+blind spot. That was wrong: two of those six returned no verdicts at all rather
+than a false pass, and the double-omission clip was later scored correctly. The
+claim is narrowed accordingly.
 
 #### The reason for a real observation and an invented one are the SAME SENTENCE
 

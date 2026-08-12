@@ -106,17 +106,38 @@ def by_step(rec: dict) -> dict[int, dict]:
     # dict silently keeps the last, which is harmless when the copies agree but
     # hides the duplication and would quietly pick a winner if they ever disagree.
     # So collapse explicitly and let the caller see the count.
+    def informativeness(row: dict) -> tuple:
+        """Rank rows for the same step, most informative first.
+
+        Duplicates are not always identical copies. One run emitted PLACEHOLDER
+        rows — `reason: "..."`, no timestamps — alongside real ones carrying the
+        actual finding. Keeping "the first" silently threw the real verdict away
+        and reported the placeholder, so prefer substance over position.
+        """
+        reason = str(row.get("reason") or "").strip()
+        placeholder = reason in ("", "...", "…")
+        has_span = row.get("timestamp_start") is not None
+        return (not placeholder, has_span, len(reason))
+
     out: dict[int, dict] = {}
+    conflicts: set[int] = set()
     for r in rows:
         if r.get("step") is None:
             continue
         step = int(r["step"]) + shift
-        if step in out and json.dumps(out[step], sort_keys=True) != \
-                json.dumps(r, sort_keys=True):
-            print(f"  WARNING: step {step} reported twice with DIFFERENT content; "
-                  f"keeping the first")
+        prev = out.get(step)
+        if prev is None:
+            out[step] = r
             continue
-        out.setdefault(step, r)
+        if json.dumps(prev, sort_keys=True) != json.dumps(r, sort_keys=True):
+            conflicts.add(step)
+            if informativeness(r) > informativeness(prev):
+                out[step] = r
+    for step in sorted(conflicts):
+        reason = str(out[step].get("reason") or "")
+        print(f"  note: step {step} was reported more than once with DIFFERING "
+              f"content; kept the most informative "
+              f"({'a real reason' if reason.strip() not in ('', '...', '…') else 'still a placeholder'})")
     return out
 
 
