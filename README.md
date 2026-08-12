@@ -1020,13 +1020,44 @@ the structural one.
 
 Observations for the author, not defects.
 
-- **`min_temporal_similarity_threshold` is not exposed.** The doc lists it as a
-  Newton Fusion Model parameter and devotes its longest section to the temporal
-  compression algorithm it controls — four stages, MAD-based adaptive
-  segmentation, a documented *"70% compression with a 25% performance
-  improvement"*. The blueprint wires only `model` and `max_new_tokens` into the
-  fusion node, so **the headline algorithmic contribution of TVA V1 is not
-  reachable from a bundle and cannot be evaluated through this API.**
+- **Three of the five documented fusion parameters are unreachable, including the
+  one that governs every failure above.** The doc's own "Newton Fusion Model
+  Parameters" list specifies:
+
+  | doc parameter | wired in the blueprint? |
+  |---|---|
+  | `model_version` | ✅ as `model` |
+  | `max_tokens` | ✅ as `max_new_tokens` |
+  | **`max_model_len`** | ❌ — *"the maximum number of total tokens the model can use in its context window, **which includes input and output tokens**"* |
+  | `gpu_memory_utilization` | ❌ |
+  | `min_temporal_similarity_threshold` | ❌ |
+
+  **`max_model_len` is `max_seq_len`.** The doc specifies it, describes the
+  input-and-output sharing exactly as observed, and the blueprint does not expose
+  it — so the 8192 ceiling behind every empty result here is a documented,
+  intended parameter that a caller cannot reach. At the doc's stated 256K it would
+  not bind at all; this deployment serves **8192**, 32× smaller.
+
+  This is not an unanticipated bug. The doc predicts it:
+
+  > *"even moderate videos can easily overflow the model's context window if not
+  > sampled efficiently"*
+
+  > *"using the raw video frames will result in the model context overflowing for
+  > even short videos"*
+
+  The whole preprocessing design — linear downsampling, 224×224 resizing, temporal
+  compression — exists to fit inside `max_model_len`. So the empty outputs are the
+  failure mode the algorithm was designed to prevent, occurring because the
+  governing parameter is unreachable.
+
+  `min_temporal_similarity_threshold` is the other consequential omission: the doc
+  devotes its longest section to the temporal compression it controls — four
+  stages, MAD-based adaptive segmentation, a documented *"70% compression with a
+  25% performance improvement"* — and **that headline algorithmic contribution
+  cannot be evaluated through this API at all.** It is also the mechanism that
+  would most plausibly relieve the ceiling, by shrinking the visual prompt without
+  dropping frames.
 - **Audio is in V1.** The doc says F1-0 adds audio in a later version; the
   blueprint runs `whisper:large-v3` into `prompt.audio` today.
 - **The parser's `step` field is 0-based and undocumented.** The doc specifies
@@ -1060,7 +1091,10 @@ Observations for the author, not defects.
    `rows_emitted: 0` field, would stop a silent empty result reading as success.
    This matters more for TVA than for MGA because the overflow correlates with the
    inputs that contain defects.
-5. **Raise `max_seq_len`, or expose it.** At 8192 total, with ~1,600 spent on a
+5. **Expose `max_model_len` — the doc already specifies it.** Not a feature
+   request: the design doc's fusion-parameter list defines `max_model_len` as the
+   context window "which includes input and output tokens", and the blueprint does
+   not wire it. At 8192 total, with ~1,600 spent on a
    64-frame prompt, a hard clip cannot fit its reasoning and there is nothing the
    caller can do — 8191 is the maximum accepted `max_new_tokens` and fewer frames
    buys little. The design doc describes a 256K context; this deployment serves
