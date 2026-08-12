@@ -996,44 +996,46 @@ direction is clear, and it means **`size` cannot currently be evaluated as a fix
 at `size: 448` the ceiling leaves 4,192 generation tokens, well under what the
 working runs used.
 
-#### Buying budget with frames backfires
+#### Buying budget with frames does not work either, and the pattern is not simple
 
 The remaining caller-side lever is to cut `max_frames`, freeing prompt tokens for
-reasoning. Tested on the clip that keeps failing:
+reasoning. Tested three ways on the clip that keeps failing, each at the largest
+budget its frame count allows:
 
-| frames | budget | thinking room | rehearsed rows |
+| frames | budget | rehearsed rows | what the model did |
 |---|---|---|---|
-| 64 | 5752 | — | **21** — the answer *was* formed |
-| 32 | 6536 | **+784** | **0** — no answer formed at all |
+| 64 | 5752 | **21** | formed the answer **seven times** — looping — then lost it all |
+| 32 | 6536 | **0** | never produced a verdict row at all |
+| 16 | 6928 | **3** | formed the answer **once, cleanly, no loop** — and still lost it |
 
-**More thinking room made it worse.** At 64 frames the model reached the verdicts and
-lost them at `</think>`; at 32 frames, with 14% more budget, it spent everything and
-never produced a single verdict row.
+**All three returned nothing**, so the lever does not work. But the pattern is
+non-monotonic and it refutes the simple explanation. An earlier version of this
+section said fewer frames make the model "stop converging", on the strength of the
+32-frame run alone. The 16-frame run shows the opposite: it converged *better* than
+any other configuration — one clean block of three verdicts, no repetition — and was
+still discarded because `</think>` never arrived.
 
-So the levers do not merely trade off — they oppose each other. The visual evidence
-appears to be what lets the reasoning *converge*, so halving the frames did not give
-the model more room to think, it gave it less to think **about**. Which closes the
-last caller-side option:
+Two things follow, and the second is more useful than the first:
+
+- **The repetition tracks frame count.** Seven blocks at 64 frames, one at 16. Whatever
+  drives the loop, more visual input makes it worse. That is worth knowing because the
+  loop is what consumes the budget.
+- **Even a single clean answer is not enough to escape.** The 16-frame run needed only
+  a closing tag. It had spent 6,928 tokens, formed the correct three-row answer, and
+  the harness threw it away. **No budget or frame setting reachable from a bundle
+  produced output on this clip** — which makes the case for emitting rehearsed rows
+  with a `truncated` marker much stronger than the case for any tuning.
 
 | lever | outcome |
 |---|---|
 | raise `max_new_tokens` | capped at ~5,822 by the window — ~70 tokens of slack at 64 frames |
-| cut frames to free budget | **the model stops converging** |
+| cut frames to free budget | 21 → 0 → 3 rehearsed rows; **empty every time** |
 | raise `size` for detail | costs budget quadratically — tested, empty |
-| change the SOP wording | bare format gives 0 rehearsed rows too; a stricter one returns nothing |
+| change the SOP wording | bare format gives 0 rehearsed; a stricter one returns nothing |
 
-Nothing a caller can set fixes this clip. The fixes are `max_model_len` (documented,
-unwired), `repetition_penalty` or `stop` (unexposed), or emitting rehearsed rows
-instead of discarding them.
-
-**Do not guess a budget.** An earlier version of these scripts defaulted to a
-"safe-looking" 5120, which gave the model *less* room than the runs that worked, for
-no reason. `tva_api.max_usable_new_tokens()` now computes it from the actual frames
-and size — 5,760 at the defaults — and the runners print what they chose.
-
-The real fix is not caller-side. **Raise `max_seq_len`.** At 8192, spatial detail,
-temporal resolution and reasoning length are in a three-way fight over one budget,
-and a ~10 mm o-ring loses.
+The fixes are all platform-side: `max_model_len` (documented, unwired),
+`repetition_penalty` or `stop` (unexposed), or emitting the rehearsed rows instead of
+discarding them.
 
 #### One infrastructure failure, reported as a completed job
 
