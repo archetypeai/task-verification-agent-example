@@ -927,6 +927,30 @@ preprocessing work with F1-0's **256K** context window (MGA's example measured a
 video at "0.15% of F1-0's 256K window"). Whatever this deployment serves,
 `max_seq_len` is **8192**.
 
+**And the divergence is visible inside the API, not just against the doc.** Sending
+an absurd budget trips the node schema first and it reports its own ceiling:
+
+```
+resolving blueprint: invalid config for 1 node(s):
+  - `fusion`: config validation failed: /max_new_tokens: 999999 is greater than
+    the maximum of 262144
+```
+
+**262144 is exactly 256 K** — the window the doc advertises, and what the schema was
+evidently written for. So three layers disagree:
+
+| layer | limit | fires |
+|---|---|---|
+| node schema | `max_new_tokens ≤ 262144` (256 K) | blueprint resolution, ~1 s |
+| graph instantiation | `max_new_tokens < max_seq_len` | after whisper, ~45 s |
+| Newton request prep | `prompt + max_new_tokens ≤ max_seq_len` | after fusion, ~7 min |
+
+The schema permits 256 K, the engine serves 8192, and it is the served value that
+governs every empty result here. Note the ordering when probing: a value above
+262144 never reaches the layer that reports `max_seq_len`, so use something between
+8192 and 262144 — 16384 is the natural choice, being the newest blueprint's own
+default.
+
 ⚠️ **The rules tightened mid-session.** Nine clips ran at `max_new_tokens: 8192`
 between 23:37 and 02:47 and produced output; at 03:58 the same value was rejected
 at graph instantiation, and 8191 then failed at fusion time. Same pinned
