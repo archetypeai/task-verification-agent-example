@@ -309,9 +309,9 @@ def main() -> None:
     # Default to the MAXIMUM the context window allows, computed from the actual
     # frames/size — not a guessed constant. See api.max_usable_new_tokens().
     if args.max_new_tokens is None:
-        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size)
+        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
         print(f"max_new_tokens not set -> using {args.max_new_tokens}, the most "
-              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size)}-token "
+              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)}-token "
               f"prompt in max_seq_len={api.MAX_SEQ_LEN}")
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
               "size": args.size}
@@ -346,7 +346,7 @@ def main() -> None:
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
     if inert:
         print(f"  WARNING: {inert} is not wired and will be silently ignored.")
-    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size)
+    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size, sop=args.sop)
     if budget_warning:
         sys.exit(f"REFUSING TO RUN: {budget_warning}")
     sink_warning = api.check_sink(bp["document"])

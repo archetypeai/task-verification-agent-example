@@ -458,7 +458,7 @@ def main() -> None:
         if args.max_new_tokens is None:
             args.max_new_tokens = api.max_usable_new_tokens(args.max_frames,
                                                             args.size)
-        ceiling = api.max_usable_new_tokens(args.max_frames, args.size)
+        ceiling = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
         at_ceiling = args.max_new_tokens >= ceiling
         print(f"\nREPRODUCING THE EMPTY-OUTPUT FAILURE\n"
               f"  clip            {os.path.basename(REPRO['video'])}\n"
@@ -488,9 +488,9 @@ def main() -> None:
     # Default to the MAXIMUM the context window allows, computed from the actual
     # frames/size — not a guessed constant. See api.max_usable_new_tokens().
     if args.max_new_tokens is None:
-        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size)
+        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
         print(f"max_new_tokens not set -> using {args.max_new_tokens}, the most "
-              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size)}-token "
+              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)}-token "
               f"prompt in max_seq_len={api.MAX_SEQ_LEN}")
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
               "size": args.size}
@@ -533,7 +533,7 @@ def main() -> None:
               f"silently ignored.")
     # The expensive one: a sink the platform cannot instantiate wastes the whole
     # cold start before failing. Catch it here, for free.
-    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size)
+    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size, sop=args.sop)
     if budget_warning:
         print(f"  ** {budget_warning}")
         if not args.force:

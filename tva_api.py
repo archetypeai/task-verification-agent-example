@@ -352,18 +352,45 @@ MAX_SEQ_LEN = 8192
 # frames are paired into steps. Calibrated against the platform's own figure of
 # 2368 tokens for max_frames=64, which implies ~800 tokens of system + SOP text.
 VISION_TOKENS_PER_STEP = 49
-TEXT_TOKEN_OVERHEAD = 800
+
+# Text overhead, split so it can adapt to the SOP actually in use.
+#
+# The platform reported a 2368-token prompt for max_frames=64, size=224 with the
+# 3-step baseline SOP. Visual accounts for 1568 of that, leaving 800 for the system
+# message, the chat template AND the SOP. Folding the SOP into a constant was the
+# first version of this and it is wrong for any other SOP: the strict variant is
+# ~94 tokens longer, which alone exceeds the 64-token safety margin and would make
+# the estimate low enough to be rejected at fusion time — after ~7 min of loading.
+#
+# So the constant below is the SOP-FREE part, and the SOP is measured separately.
+BASELINE_SOP_TOKENS = 69          # sop/oring.txt, 276 chars at ~4 chars/token
+SYSTEM_TOKEN_OVERHEAD = 800 - BASELINE_SOP_TOKENS
+CHARS_PER_TOKEN = 4               # crude, and deliberately so — see estimate below
 
 
-def estimate_prompt_tokens(max_frames: int, size: int = 224) -> int:
+def estimate_sop_tokens(sop_text_or_path: str | None) -> int:
+    """Rough token count for the SOP. Errs HIGH, because erring low costs a run."""
+    if not sop_text_or_path:
+        return BASELINE_SOP_TOKENS
+    text = sop_text_or_path
+    if os.path.exists(sop_text_or_path):
+        with open(sop_text_or_path) as fh:
+            text = fh.read()
+    # Round up: an underestimate is rejected at fusion time after the cold start,
+    # while an overestimate merely leaves a few generation tokens unused.
+    return -(-len(text) // CHARS_PER_TOKEN) + 8
+
+
+def estimate_prompt_tokens(max_frames: int, size: int = 224,
+                           sop: str | None = None) -> int:
     """Estimate the prompt's token cost, to check it against MAX_SEQ_LEN."""
     per_step = (size // 16 // 2) ** 2
     steps = max(1, max_frames // 2)
-    return steps * per_step + TEXT_TOKEN_OVERHEAD
+    return steps * per_step + SYSTEM_TOKEN_OVERHEAD + estimate_sop_tokens(sop)
 
 
 def max_usable_new_tokens(max_frames: int, size: int = 224,
-                          margin: int = 64) -> int:
+                          margin: int = 64, sop: str | None = None) -> int:
     """The largest `max_new_tokens` that fits alongside the prompt.
 
     Worth computing rather than guessing. The nine runs that produced verdicts in
@@ -377,18 +404,19 @@ def max_usable_new_tokens(max_frames: int, size: int = 224,
     a different system message) — being rejected at fusion time costs the whole
     cold start, so a few dozen tokens of slack is cheap insurance.
     """
-    return max(256, MAX_SEQ_LEN - estimate_prompt_tokens(max_frames, size) - margin)
+    return max(256, MAX_SEQ_LEN - estimate_prompt_tokens(max_frames, size, sop)
+               - margin)
 
 
 def check_token_budget(max_frames: int, max_new_tokens: int,
-                       size: int = 224) -> str | None:
+                       size: int = 224, sop: str | None = None) -> str | None:
     """Return a message if prompt + generation cannot fit in the context window.
 
     Worth doing client-side because the platform checks it at fusion time — after
     whisper and newton-fusion have both loaded, so a violation costs the full
     ~7-minute cold start and produces no output.
     """
-    prompt = estimate_prompt_tokens(max_frames, size)
+    prompt = estimate_prompt_tokens(max_frames, size, sop)
     if prompt + max_new_tokens <= MAX_SEQ_LEN:
         return None
     usable = MAX_SEQ_LEN - prompt
