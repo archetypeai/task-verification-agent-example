@@ -837,6 +837,24 @@ Two consequences worth being blunt about:
   be a downgrade for precisely the defect-bearing inputs, and it should be tested
   before anyone treats the format switch as an improvement.
 
+#### The false pass survives every configuration a caller can reach
+
+Clip `1_fail_2_pass_3_pass_E` — o-ring omitted, wrench used — was re-run with half
+the frames and a larger budget:
+
+| | frames | budget | step 1 |
+|---|---|---|---|
+| original | 64 | 8192 | **PASSED** ❌ |
+| re-run | **32** | **6536** | **PASSED** ❌ |
+
+Identical false pass, with the same invented detail (*"installing the O-ring"*). So
+neither of the two levers available from a bundle touches it: **it is not a sampling
+artifact and not a budget artifact.** That is the strongest form of this finding — the
+blind spot is a property of what the model can see, not of how the run was configured.
+
+It also confirms the difficulty gradient: this clip *produced output* at 32 frames /
+6536, the exact configuration where the double-omission clip returned nothing.
+
 #### The reason for a real observation and an invented one are the SAME SENTENCE
 
 This is the finding to take away, and it is worse than "sometimes wrong". Compare
