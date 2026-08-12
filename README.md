@@ -391,13 +391,46 @@ instruction** — the results parser owns the template, and a prompt specifying 
 own format makes it return zero steps — and **no numeric torque value**, since
 nothing in a handheld video can evidence a number.
 
-**Read a positive result carefully.** Step 1's confusion matrix is `TN=0`: TVA has
-never been observed correctly rejecting that step. So if the strict SOP yields
-`MISSING`, two explanations fit equally — it started looking for the O-ring, or it
-became pessimistic and would now also fail the six clips where the O-ring *was*
-fitted. Distinguishing them requires running the strict SOP against a `1_pass`
-clip as a control. Trading an invisible false-pass problem for an invisible
-false-fail one is not an improvement.
+#### Result: it returned NOTHING, and not for the reason you would guess
+
+Run on `1_fail_2_pass_3_pass_A` — the clip that produced a false `PASSED` on the
+baseline SOP — the strict SOP produced **zero rows**:
+
+| | the two context-exhausted runs | the strict-SOP run |
+|---|---|---|
+| `WARN … reasoning block` | present | **absent** |
+| ERROR row | none | none |
+| rows emitted | 0 | 0 |
+| generation | 1174 s / 1055 s | 998 s |
+
+**No warning at all.** So this is a different failure from the context ceiling: the
+model generated for over nine minutes and the parser matched none of it.
+
+The likely cause is that the added clauses instruct the model about **status
+values** — *"Report PASSED only if…"*, *"report MISSING"* — which is output-shaping,
+not judgement-shaping, however it reads. MGA's example established that a prompt
+saying what to *cover* parses cleanly while one saying how to lay out the answer
+makes `ManualGenerationResultsParserNode` return zero steps. **TVA has no `prompt`
+value, but the SOP is a place to make exactly the same mistake.** Confirming it
+needs a run with `parser_compute_stats: true`, which attaches template-conformance
+stats — that is what the value is for.
+
+Two conclusions, and the second is the useful one:
+
+- **Do not put output or status instructions in an SOP.** Describe the step. The
+  parser owns the verdict vocabulary, and competing with it costs a full run and
+  returns nothing — strictly worse than the false pass it was meant to fix, because
+  a false pass is at least visible.
+- **The prompt is not the lever for the blind spot.** The obvious wording fix
+  cannot even be evaluated, so `size` — a ~10 mm o-ring at 224×224 — is where to
+  look next. `size` is exposed and honoured, and `null` keeps source resolution.
+
+Had it instead returned `MISSING`, that would *still* not have settled anything:
+step 1's confusion matrix is `TN=0`, so TVA has never been observed correctly
+rejecting that step, and "it started looking" would have been indistinguishable
+from "it became pessimistic and now fails the six clips where the O-ring *was*
+fitted" without a `1_pass` control. Trading an invisible false-pass problem for an
+invisible false-fail one is not an improvement.
 
 **Keep SOP files free of comments.** `load_sop()` does strip `#` lines, but a file
 that needs stripping no longer uploads as itself — it uploads as a generated
@@ -943,10 +976,14 @@ Observations for the author, not defects.
 
 - **An audio-bearing clip.** The whisper half of the pipeline is loaded on every
   run and exercised by none of these.
-- **A `size` sweep, which is now the most valuable experiment here.** The o-ring
-  blind spot is most likely a resolution problem: at `size: 224` a ~10 mm ring is a
-  few pixels. `size` is exposed and honoured, and `null` keeps the source
-  resolution — so this is one bundle value away from being tested.
+- **A `size` sweep, now the most valuable experiment here** — promoted because the
+  SOP route has been tried and failed. The blind spot is most likely a resolution
+  problem: at `size: 224` a ~10 mm ring is a few pixels. `size` is exposed and
+  honoured, and `null` keeps the source resolution, so this is one bundle value
+  away from being tested.
+- **A `parser_compute_stats: true` run on the strict SOP**, to confirm that the
+  zero-row result is template non-conformance rather than something else. One run,
+  and it is what the value exists for.
 - **A clip with a step attempted and done WRONG.** `FAILED` never fired across 12
   clips because every failure here is an omission, so that third status is
   completely unexercised.
