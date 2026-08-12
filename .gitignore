@@ -6,7 +6,12 @@
 # Design doc — internal, not for publication in this repo.
 docs/Task Verification Agent.md
 
-# The clips in data/clips/ and the generated SOP copies in data/ ARE committed:
+# Generated SOP copies. upload_sop() writes one only when a SOP file needs
+# normalising (blank or # comment lines), and it is a derived artefact — the source
+# of truth is sop/. One got committed by accident; ignore them from now on.
+data/*.txt
+
+# The clips in data/clips/ ARE committed:
 # the recordings were produced internally for this example, so there is no
 # third-party licence to respect and the example is self-contained without a
 # download step. 80 MB total, largest file 11 MB — no LFS needed.

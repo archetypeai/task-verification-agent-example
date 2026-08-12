@@ -1,3 +1,0 @@
-Step 1: Install the rubber O-ring into the blue block-off cap. Report PASSED only if the O-ring is visibly a separate loose part in the hands and is then seated into the cap's groove on camera. If the cap is picked up and used without that fitting action being visible, report MISSING.
-Step 2: Thread the blue cap onto the black manifold by hand until snug, without cross-threading. Report PASSED only if the cap is visibly rotated onto the manifold port by hand. If it is not, report MISSING.
-Step 3: Using a wrench, tighten the blue cap. Report PASSED only if a wrench is visibly in frame and engaged on the cap. If no wrench appears, report MISSING.
