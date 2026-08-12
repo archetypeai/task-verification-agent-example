@@ -121,7 +121,7 @@ def collect(out_dir: str, bundle_id: str | None = None,
         return
 
     os.makedirs(out_dir, exist_ok=True)
-    saved = skipped = pending = empty = 0
+    saved = skipped = pending = empty = dead = 0
     for x in sorted(rows, key=lambda r: str(r.get("created_at"))):
         aid, status = x["id"], x.get("status")
         # Ask for results regardless of `status`, which is not a reliable
@@ -130,8 +130,27 @@ def collect(out_dir: str, bundle_id: str | None = None,
         res = api.request("GET", f"{api.agents_base()}/instances/{aid}/results")
         items = res.get("data") or []
         if not items:
-            pending += 1
-            print(f"  {aid}  {status:9}  no results yet")
+            # "No results" means two completely different things, and conflating
+            # them tells you to keep waiting for a run that is already over. A run
+            # that logged an ERROR, or reached a terminal event, will never produce
+            # output — one clip failed its S3 video download, logged an ERROR, and
+            # still reported job.completed.
+            rows = sorted(api.request(
+                "GET", f"{api.agents_base()}/instances/{aid}/logs?limit=500"
+            ).get("data", []), key=lambda r: str(r.get("created_at")))
+            errors = [r for r in rows if str(r.get("level")) == "ERROR"]
+            terminal = bool(rows) and str(rows[-1].get("event_type")) in api.TERMINAL_EVENTS
+            if errors:
+                dead += 1
+                print(f"  {aid}  FAILED     no results, and it will not produce any:")
+                print(f"      {str(errors[0].get('message'))[:150]}")
+            elif terminal:
+                dead += 1
+                print(f"  {aid}  FINISHED   no results — terminal "
+                      f"({rows[-1].get('event_type')}) with nothing emitted")
+            else:
+                pending += 1
+                print(f"  {aid}  {status:9}  still in flight, no results yet")
             continue
         inner = items[0].get("data") or {}
         # The output filename carries the clip: agt_<id>__output_<clip>.jsonl
@@ -157,8 +176,9 @@ def collect(out_dir: str, bundle_id: str | None = None,
               f"{len(payload)} bytes -> {out_path}")
         saved += 1
 
-    print(f"\nsaved {saved}, already had {skipped}, still running {pending}"
-          + (f", EMPTY {empty} (reasoning overflow — see the README)" if empty else ""))
+    print(f"\nsaved {saved}, already had {skipped}, still in flight {pending}"
+          + (f", EMPTY {empty} (reasoning overflow — see the README)" if empty else "")
+          + (f", FAILED {dead} (never will produce output)" if dead else ""))
     if saved or skipped:
         print(f"score it:  python3 evaluate.py {out_dir}/*.jsonl")
 

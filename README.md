@@ -617,9 +617,20 @@ ERROR  skipping video "1_fail_2_pass_3_pass_F.mp4": downloading video "s3://…"
        job.completed  Job completed in 440s
 ```
 
-`job.completed`, an ERROR row, and no results. A caller reading the job verdict
-sees success; `sweep.py --collect` reports `no results yet`. Judge from the ERROR
-row.
+`job.completed`, an ERROR row, and no results — so a caller reading the job verdict
+sees success. Worth distinguishing carefully when harvesting: "no results" means
+either *not finished yet* or *finished and produced nothing*, and conflating them
+tells you to keep waiting for a run that is already over. `--collect` reads the log
+and says which:
+
+```
+agt_6yb49ws6…  FAILED     no results, and it will not produce any:
+    skipping video "1_fail_2_pass_3_pass_F.mp4": downloading video "s3://…" failed
+```
+
+The failure looks transient — a download, not a bad input — so a retry is the right
+response. It is a `1_fail` clip, which is why the o-ring finding rests on 5 usable
+clips rather than 6.
 
 #### What this example does and does not establish
 
