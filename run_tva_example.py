@@ -540,9 +540,11 @@ def main() -> None:
     # frames/size — not a guessed constant. See api.max_usable_new_tokens().
     if args.max_new_tokens is None:
         args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
-        print(f"max_new_tokens not set -> using {args.max_new_tokens}, the most "
-              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)}-token "
-              f"prompt in max_seq_len={api.MAX_SEQ_LEN}")
+        print(f"max_new_tokens not set -> using {args.max_new_tokens}: "
+              f"{api.MAX_SEQ_LEN_KNOWN_GOOD} (largest total OBSERVED to work) "
+              f"- ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)} prompt - 64 margin.\n"
+              f"  The served max_seq_len is not exposed and was raised at least once, "
+              f"so a larger value may well work — pass --max-new-tokens to try.")
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
               "size": args.size}
 

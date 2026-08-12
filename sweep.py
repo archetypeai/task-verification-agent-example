@@ -52,7 +52,24 @@ def label_str(clip: str) -> str:
     return "/".join(f"{k}={'pass' if v else 'FAIL'}" for k, v in sorted(truth.items()))
 
 
-def submit_all(args, bundle_id: str, sop_id: str, clips: list[str]) -> None:
+def sop_id_for(args, stem: str, steps: list[str], shared: str | None) -> str:
+    """The SOP file id to send for one clip.
+
+    `shared` is the single upload used when not pairing. In pairing mode it is None
+    and each clip gets its own <stem>.txt — which is why this must be one function
+    used by BOTH run paths. It was duplicated in the sequential loop only, so
+    --submit-all sent `id: null` and the API rejected the run with a 422.
+    """
+    if shared is not None:
+        return shared
+    paired = os.path.join("sop", "paired", f"{stem}.txt")
+    if os.path.exists(paired) and open(paired).read() == sop_text(steps):
+        return api.upload_file(paired)
+    return api.upload_text(sop_text(steps), f"{stem}.txt")
+
+
+def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
+               steps: list[str]) -> None:
     """Submit every run before collecting any, then poll them in order.
 
     Sequential submission leaves the GPU unclaimed between clips, and dev is
@@ -73,7 +90,8 @@ def submit_all(args, bundle_id: str, sop_id: str, clips: list[str]) -> None:
             print(f"[{i}/{len(clips)}] {stem} — already have {out_path}, skipping")
             continue
         video_id = api.upload_file(path)
-        agent_id = api.run(bundle_id, video_id, sop_id)
+        agent_id = api.run(bundle_id, video_id,
+                           sop_id_for(args, stem, steps, sop_id))
         print(f"[{i}/{len(clips)}] submitted {stem:<32s} {agent_id}")
         pending.append((stem, agent_id, out_path))
 
@@ -317,9 +335,11 @@ def main() -> None:
     # frames/size — not a guessed constant. See api.max_usable_new_tokens().
     if args.max_new_tokens is None:
         args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
-        print(f"max_new_tokens not set -> using {args.max_new_tokens}, the most "
-              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)}-token "
-              f"prompt in max_seq_len={api.MAX_SEQ_LEN}")
+        print(f"max_new_tokens not set -> using {args.max_new_tokens}: "
+              f"{api.MAX_SEQ_LEN_KNOWN_GOOD} (largest total OBSERVED to work) "
+              f"- ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)} prompt - 64 margin.\n"
+              f"  The served max_seq_len is not exposed and was raised at least once, "
+              f"so a larger value may well work — pass --max-new-tokens to try.")
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
               "size": args.size}
 
@@ -389,7 +409,7 @@ def main() -> None:
                                values)
     print(f"bundle {bundle['id']} (reused for all {len(clips)} runs)\n")
     if args.submit_all:
-        submit_all(args, bundle["id"], sop_id, clips)
+        submit_all(args, bundle["id"], sop_id, clips, steps)
         return
 
     log = []
@@ -405,14 +425,8 @@ def main() -> None:
         agent_id = None
         try:
             video_id = api.upload_file(path)
-            this_sop = sop_id
-            if this_sop is None:
-                paired = os.path.join("sop", "paired", f"{stem}.txt")
-                this_sop = (api.upload_file(paired)
-                            if os.path.exists(paired) and
-                               open(paired).read() == sop_text(steps)
-                            else api.upload_text(sop_text(steps), f"{stem}.txt"))
-            agent_id = api.run(bundle["id"], video_id, this_sop)
+            agent_id = api.run(bundle["id"], video_id,
+                               sop_id_for(args, stem, steps, sop_id))
             print(f"  agent_id={agent_id}")
             verdict = api.poll_logs(agent_id, quiet=True)
             payload = api.fetch_results(agent_id, out_path)
