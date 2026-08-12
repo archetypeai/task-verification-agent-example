@@ -454,6 +454,15 @@ def main() -> None:
                          "only ~6400 remain for the model's <think> block plus the "
                          "verdicts. Raising this cannot buy more than the ceiling "
                          "allows. (default: 8191, the maximum accepted)")
+    ap.add_argument("--pair-sop", action="store_true",
+                    help="upload the SOP as <video-stem>.txt so the video and text "
+                         "share a stem. Reported as how the pipeline pairs a video "
+                         "with its SOP: inputs arrive as one flat list of file ids, "
+                         "so a pack of N videos and N texts is matched by name. "
+                         "UNVERIFIED here — a 1:1 run works either way (our runs "
+                         "used mismatched stems and the verdicts plainly reflect "
+                         "the SOP), so compare digests to see whether the name "
+                         "changes anything.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"text file of SOP steps, one per line "
                          f"(default: {DEFAULT_SOP_PATH}). The SOP is the ONLY "
@@ -545,7 +554,8 @@ def main() -> None:
         print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
         print(json.dumps({"connectors": {"source": [
             {"type": "file", "id": os.path.basename(args.video), "format": "mp4"},
-            {"type": "file", "id": sop_upload_name(args.sop), "format": "txt"},
+            {"type": "file", "id": (f"{clip}.txt" if args.pair_sop
+                                    else sop_upload_name(args.sop)), "format": "txt"},
         ]}}, indent=2))
         print(f"\nthe SOP that would be uploaded ({len(steps)} steps, "
               f"one per line):\n")
@@ -600,7 +610,18 @@ def main() -> None:
     print(f"\nuploading {args.video} "
           f"({os.path.getsize(args.video) / 1e6:.1f} MB) ...")
     video_id = api.upload_file(args.video)
-    sop_id = upload_sop(args.sop, steps)
+    if args.pair_sop:
+        # Uploaded under the VIDEO's stem, because the pipeline receives inputs as one
+        # flat list of file ids and pairs a video with its SOP by matching stems. A
+        # per-clip name also means concurrent runs on different clips cannot clobber
+        # each other's SOP, which one shared name does allow.
+        paired = os.path.join("sop", "paired", f"{clip}.txt")
+        if os.path.exists(paired) and open(paired).read() == sop_text(steps):
+            sop_id = api.upload_file(paired)          # ship the committed file itself
+        else:
+            sop_id = api.upload_text(sop_text(steps), f"{clip}.txt")
+    else:
+        sop_id = upload_sop(args.sop, steps)
     print(f"  video file_id={video_id}\n  sop   file_id={sop_id}")
 
     # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and

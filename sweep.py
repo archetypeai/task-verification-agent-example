@@ -42,7 +42,7 @@ import time
 
 import tva_api as api
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
-                            parse_ground_truth, resolve_clip, upload_sop)
+                            parse_ground_truth, resolve_clip, sop_text, upload_sop)
 
 OUT_DIR = "eval_out"
 
@@ -239,6 +239,13 @@ def main() -> None:
                          "cannot slip in between your clips. The cost: a "
                          "misconfiguration burns every run instead of the first, "
                          "and this example has hit two such failures already.")
+    ap.add_argument("--pair-sop", action="store_true",
+                    help="upload one SOP per clip named <clip-stem>.txt, from "
+                         "sop/paired/ when present. The pipeline pairs video and "
+                         "text by stem because inputs arrive as one flat list of "
+                         "file ids, so a shared SOP name is only safe for 1:1 runs. "
+                         "Also removes the risk of concurrent runs clobbering a "
+                         "shared SOP object.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan — bundle values, clips, which are "
                          "already done, estimated time — and stop. No API calls.")
@@ -360,8 +367,12 @@ def main() -> None:
 
     # One upload for the whole sweep: every clip is checked against the SAME
     # procedure, so the SOP is uploaded once and its file_id reused.
-    sop_id = upload_sop(args.sop, steps)
-    print(f"SOP uploaded as {sop_id}")
+    sop_id = None
+    if args.pair_sop:
+        print(f"pairing mode: one SOP per clip, named <clip-stem>.txt")
+    else:
+        sop_id = upload_sop(args.sop, steps)
+        print(f"SOP uploaded as {sop_id} (shared by every clip)")
 
     # ONE bundle for the whole sweep, reused by every run.
     #
@@ -394,7 +405,14 @@ def main() -> None:
         agent_id = None
         try:
             video_id = api.upload_file(path)
-            agent_id = api.run(bundle["id"], video_id, sop_id)
+            this_sop = sop_id
+            if this_sop is None:
+                paired = os.path.join("sop", "paired", f"{stem}.txt")
+                this_sop = (api.upload_file(paired)
+                            if os.path.exists(paired) and
+                               open(paired).read() == sop_text(steps)
+                            else api.upload_text(sop_text(steps), f"{stem}.txt"))
+            agent_id = api.run(bundle["id"], video_id, this_sop)
             print(f"  agent_id={agent_id}")
             verdict = api.poll_logs(agent_id, quiet=True)
             payload = api.fetch_results(agent_id, out_path)

@@ -519,6 +519,40 @@ already gives**, in a format the doc warns not to modify. The lesson is sharper
 than "do not specify output format": the system message has already covered
 status semantics, so an SOP repeating them can only conflict.
 
+### Pairing a video with its SOP: matching stems
+
+A run's inputs arrive as **one flat list of file ids**. Nothing in the payload says
+"this text belongs to that video", so when a run carries several videos and several
+SOPs the pipeline pairs them **by matching stems** — `X.mp4` with `X.txt`. The console
+and the API share this, because they share the blueprint.
+
+```sh
+python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A.mp4 --pair-sop
+python3 sweep.py --all --pair-sop          # one SOP per clip, stems matched
+```
+
+[`sop/paired/`](sop/paired) holds one copy per clip for exactly this, with a
+`regenerate.py --check` that fails if a copy drifts from its source.
+
+**What is verified and what is not.** Every result committed under `reference/` was
+produced with a single shared SOP whose name did *not* match the clip, and the
+verdicts plainly reflect the SOP — *"blue cap"*, *"black manifold"*, *"no wrench is
+shown"*. So a **1:1 run pairs correctly regardless of naming**. Whether the name
+changes the output at all is **untested**; the digests make it a one-run experiment:
+
+| `--pair-sop` on a known config | conclusion |
+|---|---|
+| same digest as the unpaired run | the filename never reaches the prompt — naming is presentational for 1:1 |
+| different digest | the name influences the run, and everything here was gathered unpaired |
+
+For **multi-input** runs the convention is not optional — it is the only thing that
+can associate a video with its procedure.
+
+**A second reason to prefer it:** a per-clip SOP name makes the clobber bug
+impossible. Two concurrent runs sharing one `oring.txt` can overwrite each other's
+input object, which destroyed three runs during this work; `X.txt` and `Y.txt` cannot
+collide.
+
 ### Where the SOP lives on the wire — and where it does not
 
 **Not in the bundle.** The bundle carries only `values`:
@@ -1483,6 +1517,7 @@ Observations for the author, not defects.
 | `sop/oring.txt` | The SOP, one bare step per line, matching the doc's example instruction. Edit this to change the procedure — no Python involved. |
 | `sop/oring-numbered.txt` | The `Step N:` variant that produced every committed result, kept for provenance. Its prefixes duplicate the automatic `[index]`. |
 | `sop/oring-strict.txt` | A stricter variant that returns ZERO rows — kept as the worked example of an SOP competing with the system message. |
+| `sop/paired/` | One SOP per clip, named `<clip-stem>.txt`, for the stem-matching the pipeline uses to pair a video with its procedure. Derived from `oring-numbered.txt`; `regenerate.py --check` catches drift. |
 | `sweep.py` | Batch path over many clips, reusing one bundle. Sequential by default so a misconfiguration costs one run, not twelve; `--submit-all` instead claims every queue slot up front. `--collect` harvests finished runs after a disconnect and `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
 | `tva_api.py` | Shared stdlib client (streaming upload, retries, `/logs` polling, wired-value preflight). |
