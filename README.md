@@ -878,21 +878,12 @@ reproducing, not as a measured error rate.**
 
 The failure most worth recognising is the one that looks like success:
 `job.completed`, no ERROR row, and no verdicts. `run_tva_example.py` reproduces it
-as a first-class mode and reports each symptom as CONFIRMED or NOT REPRODUCED.
+and reports each symptom as CONFIRMED or NOT REPRODUCED.
 
 **Offline — instant, no API key, no GPU:**
 
 ```sh
 python3 run_tva_example.py --repro-empty --offline
-```
-
-```
-  raw bytes: {"id":"1_pass_2_pass_3_fail_A","results":[]}
-
-  CONFIRMED      a record IS returned (this is not a missing file)
-  CONFIRMED      it contains NO verdicts
-  CONFIRMED      the output is tiny (~44 bytes)
-  md5 1b56135df5d1476c625e6aedfd18b91b
 ```
 
 **Live — ~13 minutes:**
@@ -901,21 +892,47 @@ python3 run_tva_example.py --repro-empty --offline
 python3 run_tva_example.py --repro-empty
 ```
 
-It pins the configuration that triggers it: `1_pass_2_pass_3_fail_A` at
-`max_new_tokens: 2048`, the blueprint's own historic default.
+```
+  clip            1_fail_2_pass_3_fail_A.mp4
+                  steps 1 AND 3 skipped — no o-ring, no wrench
+  max_new_tokens  5760   <-- the MAXIMUM the context window allows
 
-**The clip matters as much as the setting**, and this is the part worth
-internalising: a clip where every step was performed correctly fits inside 2048
-tokens and will *not* reproduce this. This clip has step 3 skipped, and the model
-reasons far longer about an absence than about a clean pass — long enough to spend
-the whole budget inside `<think>` and emit nothing. So the reproduction is also a
-demonstration of the deployment risk: **the runs that fail are the ones containing
-a defect.**
+  READ THIS: the budget is already as high as it can go. There is no caller-side
+  setting that fixes this run — a larger budget is rejected, and raising `size` or
+  `max_frames` makes it worse by taking tokens from the same window.
+```
 
-If it does not reproduce, that is expected variance rather than a broken script —
-the budget needed depends on the clip and on how much the model reasons. Try a clip
-with two skipped steps (`1_fail_2_pass_3_fail_A`) or lower `--max-new-tokens`
-further.
+**The budget is deliberately at its ceiling.** An earlier version of this mode
+pinned `max_new_tokens: 2048` to force the failure. That reproduced it, but taught
+the wrong lesson — that raising the budget is the fix. **It is not.** The two clips
+that returned empty in the sweep were already at the ceiling: they asked for 8192,
+and the engine gave them everything left after the prompt. This mode reproduces
+*that*, and its log is the most revealing line in the example:
+
+```
+WARN  … generation ended inside the model's reasoning block (no `</think>`),
+      so it never produced an answer; DROPPING 37 REHEARSED ROW(S).
+```
+
+**Thirty-seven candidate verdicts existed and were discarded.** The answer was
+formed; the window ran out before it could be closed.
+
+The clip is what makes it fail, not the setting: this one has **both** step 1 and
+step 3 skipped, and the model reasons far longer about absences than about a clean
+pass. An all-correct clip fits easily and will not reproduce it. That asymmetry is
+the deployment risk stated as a reproduction — **the runs that fail are the ones
+containing defects.**
+
+The avoidable variant is still available for contrast, and says so when you use it:
+
+```sh
+python3 run_tva_example.py --repro-empty --max-new-tokens 2048   # NOTE: avoidable version
+```
+
+If the default does not reproduce, that is expected variance rather than a broken
+script — reasoning length is not perfectly predictable. Lower `--max-new-tokens`
+and it will, but note that you have then reproduced the fixable failure rather than
+the structural one.
 
 ## Platform behavior worth knowing
 

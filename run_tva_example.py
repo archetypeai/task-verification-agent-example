@@ -130,25 +130,38 @@ def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
 # Statuses the TaskVerificationResultsParserNode emits, per the design doc.
 STATUSES = ("PASSED", "FAILED", "MISSING")
 
-# --repro-empty: the exact configuration that makes a run report success and
-# return no verdicts at all. Kept as a first-class mode because it is the failure
-# most worth recognising and the least visible: `job.completed`, no ERROR row, and
-# an empty `results` list.
+# --repro-empty: a run that reports success and returns no verdicts at all.
+# `job.completed`, no ERROR row, an empty `results` list.
 #
-# The clip matters as much as the setting. A clip where every step was performed
-# correctly fits comfortably in 2048 tokens; this one has step 3 SKIPPED, and the
-# model reasons much longer about an absence than about a clean pass — long enough
-# to spend the whole budget inside <think> and emit nothing.
+# THE BUDGET IS DELIBERATELY AT ITS MAXIMUM HERE. An earlier version of this mode
+# pinned max_new_tokens: 2048 to force the failure, which reproduced it but taught
+# the wrong lesson — that raising the budget is the fix. It is not. The two clips
+# that returned empty in the 12-clip sweep were running at the CEILING already
+# (they asked for 8192, and the engine gave them everything left after the prompt),
+# and this mode reproduces that: the budget is computed as the most the context
+# window allows, and the clip still comes back with nothing.
+#
+# The clip is what makes it fail. This one has BOTH step 1 and step 3 skipped, and
+# the model reasons far longer about absences than about a clean pass — its log
+# reported `dropping 37 rehearsed row(s)`, meaning it had formed 37 candidate
+# verdicts inside <think> and every one was discarded when the budget ran out
+# before `</think>`. A clip where every step was performed correctly fits easily
+# and will NOT reproduce this.
 REPRO = {
-    "video": "data/clips/1_pass_2_pass_3_fail_A.mp4",
+    "video": "data/clips/1_fail_2_pass_3_fail_A.mp4",
     "max_frames": 64,
     "size": 224,
-    "max_new_tokens": 2048,      # the blueprint's own historic default
+    "max_new_tokens": None,      # None -> the computed maximum. See above.
 }
-# Byte-for-byte what that configuration produced, committed so the shape of the
-# failure can be inspected with no API key at all.
-REPRO_REFERENCE = "reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl"
-REPRO_EXPECTED_MD5 = "1b56135df5d1476c625e6aedfd18b91b"
+# What that clip produced in the sweep, committed so the failure is inspectable
+# offline with no API key.
+REPRO_REFERENCE = "reference/sweep/tva-output-1_fail_2_pass_3_fail_A.jsonl"
+REPRO_EXPECTED_MD5 = "d131e7a67a858a0968483a9414dda982"
+
+# The avoidable variant, kept only so the contrast is available:
+#   python3 run_tva_example.py --repro-empty --max-new-tokens 2048
+# on 1_pass_2_pass_3_fail_A. That one IS fixed by raising the budget; the default
+# above is not, which is the point.
 
 
 # Extensions a clip may carry. `ls data/clips` shows names WITH the extension, so
@@ -439,21 +452,34 @@ def main() -> None:
             repro_analyse(REPRO_REFERENCE)
             return
         print(__doc__.split("REPRODUCING")[0].strip().splitlines()[0])
-        print(f"\nREPRODUCING THE EMPTY-OUTPUT FAILURE\n"
-              f"  clip            {REPRO['video']}\n"
-              f"                  (step 3 SKIPPED — the wrench never appears)\n"
-              f"  max_new_tokens  {REPRO['max_new_tokens']}   <-- the cause\n"
-              f"  max_frames      {REPRO['max_frames']}, size {REPRO['size']}\n"
-              f"  SOP             {args.sop or DEFAULT_SOP_PATH} (unmodified)\n\n"
-              f"  Expect: job.completed, NO ERROR row, a WARN naming the model's\n"
-              f"  reasoning block, and results: [] — about 44 bytes.\n"
-              f"  A clip where every step was done correctly fits in 2048 and will\n"
-              f"  NOT reproduce this; the skipped step is what makes it reason long\n"
-              f"  enough to spend the budget before answering.\n")
         args.video = REPRO["video"]
         args.max_frames = REPRO["max_frames"]
         args.size = REPRO["size"]
-        args.max_new_tokens = REPRO["max_new_tokens"]
+        if args.max_new_tokens is None:
+            args.max_new_tokens = api.max_usable_new_tokens(args.max_frames,
+                                                            args.size)
+        ceiling = api.max_usable_new_tokens(args.max_frames, args.size)
+        at_ceiling = args.max_new_tokens >= ceiling
+        print(f"\nREPRODUCING THE EMPTY-OUTPUT FAILURE\n"
+              f"  clip            {os.path.basename(REPRO['video'])}\n"
+              f"                  steps 1 AND 3 skipped — no o-ring, no wrench\n"
+              f"  max_new_tokens  {args.max_new_tokens}"
+              f"{'   <-- the MAXIMUM the context window allows' if at_ceiling else '   (below the ceiling of %d)' % ceiling}\n"
+              f"  max_frames      {args.max_frames}, size {args.size}\n"
+              f"  SOP             {args.sop or DEFAULT_SOP_PATH} (unmodified)\n\n"
+              f"  Expect: job.completed, NO ERROR row, and results: [] — ~44 bytes.\n")
+        if at_ceiling:
+            print("  READ THIS: the budget is already as high as it can go. There is\n"
+                  "  no caller-side setting that fixes this run — a larger budget is\n"
+                  "  rejected, and raising `size` or `max_frames` makes it worse by\n"
+                  "  taking tokens from the same window. The model reasons longer\n"
+                  "  about absences than about a clean pass, and this clip has two.\n"
+                  "  An all-correct clip fits easily and will NOT reproduce this.\n")
+        else:
+            print("  NOTE: you have set a budget below the ceiling, which reproduces\n"
+                  "  the AVOIDABLE version — that one really is fixed by raising\n"
+                  "  --max-new-tokens. Drop the flag to reproduce the version that\n"
+                  "  cannot be fixed from a bundle.\n")
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
