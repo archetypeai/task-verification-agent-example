@@ -1196,6 +1196,40 @@ WARN  … generation ended inside the model's reasoning block (no `</think>`),
 **Thirty-seven candidate verdicts existed and were discarded.** The answer was
 formed; the window ran out before it could be closed.
 
+#### The repetition expands to fill whatever budget you give it
+
+This is the finding that closes the tuning question. The same clip, same SOP, only the
+budget varying:
+
+| `max_new_tokens` | blocks rehearsed | rows | closed `</think>`? |
+|---|---|---|---|
+| 5,752 | 7 | **21** | no |
+| 8,192 | ~12 | **37** | no |
+
+**More room produced more repetition, not an answer.** And the 37 reproduced exactly
+across two runs a day apart, on different blueprint versions — so it is deterministic,
+not variance.
+
+That is why every tuning avenue failed, and it reframes the platform's own advice.
+`max_seq_len` was raised at some point on 2026-08-12 — a total of 10,568 is now
+accepted where 8,192 was the ceiling the day before — and **it did not help**, because
+the model does not run out of room so much as consume whatever room exists.
+
+| lever | result |
+|---|---|
+| raise `max_new_tokens` | more repetition, still no answer |
+| the raised `max_seq_len` | same, for the same reason |
+| cut `max_frames` to free budget | tested at 32 and 16 — never helped, and at 16 it broke a clip that had answered |
+| raise `size` | costs budget quadratically — tested, empty |
+| change the SOP wording | bare gives 0 rehearsed rows; stricter returns nothing |
+
+So the WARN's *"Raise `max_new_tokens` if the reasoning was truncated"* is misleading
+in this deployment: the reasoning is not truncated for want of space, it is filling the
+space. The levers that would actually address it — `repetition_penalty` and `stop` —
+are not exposed on this blueprint, though MGA's superseded blueprint wired both. And
+failing that, **emitting the rehearsed rows with a `truncated` marker would return a
+usable answer**: on this clip the verdicts were formed twelve times over and discarded.
+
 #### `dropping N rehearsed row(s)` is the diagnostic to read
 
 That number is the most useful thing the platform exposes about an empty result, and
