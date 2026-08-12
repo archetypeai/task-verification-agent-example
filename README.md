@@ -951,16 +951,28 @@ the structural one.
   former. The uid fails at source resolution, after the pod has started.
 - **Uploads enforce the DECLARED MIME type**, not the bytes. `text/plain` for the
   SOP and `video/mp4` for the clip. A `.mp4` declared as `text/csv` is rejected.
-- **An upload can report success and leave no object.** Twice in one session
-  `/v0.5/files` returned `is_valid: true` with a `file_id`, and the object was
-  absent — once a video, once the SOP — surfacing only inside the run ~13 minutes
-  later as `S3 object not found`, with `job.completed` on the job. `is_valid` is
-  not sufficient; **read the file back** (`GET /v0.5/files/download/{file_id}`)
-  before spending a run, which is what `tva_api.upload_file` now does.
-- **`file_id` IS the basename, so re-uploading replaces the object.** A run holds a
-  reference to the object as it was at resolution time, so re-uploading the same
-  name while a run is in flight is a plausible way to lose its inputs. Unique
-  per-run names avoid it entirely, at the cost of readable filenames.
+- **`file_id` IS the basename, so re-uploading DESTROYS an in-flight run's input.**
+  This cost three runs here before the mechanism was clear, and the timeline is
+  unambiguous:
+
+  ```
+  05:51:25  run A resolves inputs, pinning SOP object f7307e1d-…
+  05:53:45  run B uploads oring.txt again -> a new object replaces A's
+  later     run A executes -> its object is gone -> S3 object not found
+  ```
+
+  A run pins the object at input-resolution time, not at execution time, and dev
+  queues runs for up to an hour — so any re-upload of the same name in that window
+  is fatal to whatever is already queued. It surfaces minutes later, inside the
+  run, as `S3 object not found`, with `job.completed` on the job.
+
+  **The fix is not to rename**, which would sacrifice readable filenames; it is to
+  **not re-upload what is already there.** `tva_api.upload_file()` compares the
+  local bytes against `GET /v0.5/files/download/{file_id}` and skips the upload
+  when they match, warning when they differ. That makes running two clips
+  concurrently over one SOP safe, which the plain-name scheme otherwise is not.
+- **`is_valid: true` is not proof the object landed.** It is returned alongside a
+  `file_id` regardless, so read the file back before spending a run.
 - **The bundle endpoint is plural.** `POST /agents/bundle` → 404; use
   `/agents/bundles`. The RED and OSM example repos still use the singular form.
 - **Starting a run returns 202, not 201.**

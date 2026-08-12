@@ -124,8 +124,32 @@ def guess_content_type(path: str) -> str:
     return ctype or "application/octet-stream"
 
 
+def remote_bytes(file_id: str) -> bytes | None:
+    """The object currently stored under `file_id`, or None if absent."""
+    status, payload = request("GET", f"{api_base()}/v0.5/files/download/{file_id}",
+                              raw=True, allow_status=True)
+    return payload if status == 200 and isinstance(payload, bytes) else None
+
+
 def upload_file(path: str, rename: str | None = None, verify: bool = True) -> str:
     """POST a file to /v0.5/files, streamed from disk. Returns the file_id.
+
+    IDEMPOTENT: if an object with the same name and the same bytes is already on
+    the platform, this SKIPS the upload. That is not an optimisation — it prevents
+    a data-loss bug that cost three runs here.
+
+    `file_id` IS the basename, so re-uploading replaces the stored object. A run
+    pins the object at input-resolution time, so replacing it while that run is
+    still queued destroys its input, and the run fails minutes later with
+    `S3 object not found`. Observed exactly:
+
+        05:51:25  run A resolves inputs, pinning SOP object f7307e1d-…
+        05:53:45  run B uploads oring.txt again -> new object replaces A's
+        later     run A executes -> its object is gone -> S3 object not found
+
+    Skipping the redundant upload keeps readable, stable filenames AND makes
+    concurrent runs over the same inputs safe. When the bytes genuinely differ the
+    upload must happen, so that case warns instead.
 
     The body is streamed rather than buffered: preamble + file handle +
     epilogue with an explicit Content-Length. These clips are only ~8 MB, but
@@ -139,8 +163,24 @@ def upload_file(path: str, rename: str | None = None, verify: bool = True) -> st
     """
     if not os.path.exists(path):
         sys.exit(f"no such file: {path}")
-    boundary = uuid.uuid4().hex
     filename = rename or os.path.basename(path)
+    # Skip the upload when the identical object is already there — see docstring.
+    # Read the local file only when it is small enough to compare cheaply; a
+    # multi-gigabyte input is not worth buffering to save one request.
+    if os.path.getsize(path) < 64 * 1024 * 1024:
+        with open(path, "rb") as fh:
+            local = fh.read()
+        existing = remote_bytes(filename)
+        if existing == local:
+            print(f"  {filename}: identical object already on the platform — "
+                  f"skipping upload (re-uploading would break any run already "
+                  f"referencing it)")
+            return filename
+        if existing is not None:
+            print(f"  WARNING: {filename} exists with DIFFERENT bytes. Replacing "
+                  f"it breaks any run already referencing it — those fail with "
+                  f"'S3 object not found' minutes later.")
+    boundary = uuid.uuid4().hex
     preamble = b"".join([
         f"--{boundary}\r\n".encode(),
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
