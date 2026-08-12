@@ -425,8 +425,14 @@ instructs the model in the same scheme:
 > *"where N is the step's number written as a plain integer **starting at 0** (the
 > first step is `step 0:`, the second is `step 1:`…)"*
 
-So a step should arrive as bare text. **The SOP shipped here does not** — it carries
-its own `Step N:` prefix, one-based, giving three colliding schemes:
+**Be careful how far to take this.** The doc specifies the *wrapper* — `[index]`
+plus `Steps: {…}` — and says not to modify it. It says **nothing about what each
+step string should contain**, and contains no example SOP at all. So "steps should
+arrive as bare text" is an **inference**, not a documented rule: since `[index]` is
+supplied for you, adding a one-based `Step N:` puts two disagreeing numbers in one
+line. That is the reasoning; there is no run here proving it matters.
+
+With that caveat, the SOP shipped here gives three numbering schemes at once:
 
 | source | numbering |
 |---|---|
@@ -437,9 +443,11 @@ its own `Step N:` prefix, one-based, giving three colliding schemes:
 The model therefore receives `[0] Step 1: Install the rubber O-ring…` —
 double-numbered, with the two numbers disagreeing.
 [`sop/oring-plain.txt`](sop/oring-plain.txt) is the same procedure without the
-prefixes, matching the golden format. **Which wording is better is untested here**;
-the prefixes were added before the golden reference was known, and the 12-clip
-results were all produced with them.
+prefixes, which is what the golden reference's `[index]` wrapping *implies* a step
+string should look like. **Untested**: the prefixes were added before the golden
+reference was known, all 12-clip results used them, and no run has compared the
+two. The cheapest test is one single-omission clip with `--sop sop/oring-plain.txt`
+to see whether the false PASS survives.
 
 ### What the system message already demands
 
