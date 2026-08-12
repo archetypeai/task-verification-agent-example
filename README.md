@@ -183,6 +183,35 @@ Five properties, none of them documented in the blueprint:
   contiguously, so every second must be labelled; TVA emits one row per SOP step
   and the rows can leave gaps. **TVA is verification, not segmentation.**
 
+### JSON or JSONL? Both — and it matters when you merge
+
+Three things disagree about this, so it is worth stating plainly:
+
+| | |
+|---|---|
+| the sink format | `jsonl/per-request` |
+| the filename the platform returns | `…__output_<clip>.`**`json`** |
+| the bytes on disk | **one** JSON object, **no trailing newline** |
+
+**JSONL is the format contract, not a description of these files.**
+`jsonl/per-request` means *one JSON record per request* — and a run here processes
+one video, so there is exactly one record, byte-identical to plain JSON. The `l`
+only materialises when a run has several source inputs, where you get one line per
+input. This repo names its copies `.jsonl` after the sink format; the platform's
+`.json` is why an earlier version of `--collect` saved files as
+`<clip>.json.jsonl`.
+
+The consequence is a real trap. **Because there is no trailing newline,
+concatenating outputs corrupts them:**
+
+```
+cat out_A.jsonl out_B.jsonl > merged.jsonl   # ONE line, two objects, parses as neither
+# json.decoder.JSONDecodeError: Extra data: line 1 column 726
+```
+
+Read each file separately — `evaluate.py` and `--show` take a list of paths and
+read line by line, so neither trap reaches them — or add the newline when merging.
+
 ## The end-to-end example, stage by stage
 
 ```
