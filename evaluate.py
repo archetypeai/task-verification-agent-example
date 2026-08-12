@@ -160,6 +160,7 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
     unreported = []            # a labelled step the run never mentioned
     status_counts = {s: 0 for s in STATUSES}
     no_interval = 0
+    suspect = []              # PASSED/FAILED with no interval — not real verdicts
     intervals = []
 
     for clip, rec in sorted(pairs):
@@ -221,6 +222,8 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
             if row is not None:
                 if ts is None or te is None:
                     no_interval += 1
+                    if status in ("PASSED", "FAILED"):
+                        suspect.append((clip, step, status))
                 else:
                     intervals.append((clip, step, float(ts), float(te)))
 
@@ -264,8 +267,18 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
         for clip, step in unreported:
             print(f"    {clip}  step {step}")
     if no_interval:
-        print(f"\nrows with no timestamps: {no_interval} "
-              f"(expected for MISSING — there is no interval to point at)")
+        print(f"\nrows with no timestamps: {no_interval}")
+        print("  MISSING rows carry none BY DESIGN — a step that never happened has\n"
+              "  no interval, and the doc's format omits the fields for that status.")
+    if suspect:
+        # 42 of 42 genuine PASSED rows in this dataset carry an interval, so a
+        # PASSED row without one is not a real verdict — it is the placeholder
+        # block the model emits when it loops. Worth naming rather than scoring.
+        print(f"\nSUSPECT rows ({len(suspect)}): status PASSED/FAILED with NO "
+              f"interval.\n  Every genuine PASSED row observed here has one, so "
+              f"these are the parser's\n  placeholder artifact, not verdicts:")
+        for clip, step, status in suspect:
+            print(f"    {clip}  step {step}: {status} with null timestamps")
 
     if intervals:
         print("\nintervals reported (NOT scored — no per-step ground-truth "

@@ -1077,7 +1077,12 @@ Observations for the author, not defects.
   `step: <int>` without saying where it starts.
 - **`MISSING` rows are specified to carry no timestamps** and the doc's own format
   agrees (`step N: MISSING, reason: <reason>` has no timestamp fields) — worth
-  stating in the output schema, since consumers must handle nulls.
+  stating in the output schema, since consumers must handle nulls. Observed
+  consistently: every `MISSING` row has null timestamps, and **42 of 42 genuine
+  `PASSED` rows carry an interval.** That regularity is useful — a `PASSED` row
+  *without* an interval is not a verdict but the placeholder artifact the model
+  emits when it loops, so `evaluate.py` flags those as SUSPECT rather than scoring
+  them.
 - **The model is fp8** — `f1_0_35b_a3b_fp8_base_040625b4d0750b`, confirming the
   35B/3B-active MoE description and adding quantization the doc does not mention.
 
