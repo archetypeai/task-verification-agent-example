@@ -679,12 +679,27 @@ downloaded newton-fusion from scratch — 5 minutes, twice. **~7 of every 13 min
 is model loading**, so the marginal cost of one more clip is far lower than the
 first, and batching with `sweep.py` is worth it.
 
-**Generation is deterministic.** The same clip and SOP run twice — 25 minutes
-apart, under **two different API keys in two different orgs** — produced
-byte-identical output: 678 bytes, md5 `7eb028ac7d39938b261be17eaaf3e2bb`. So a
-matching digest means you reproduced a run exactly, and a differing one means
-something real changed (the clip, `max_frames`, the SOP, or the blueprint). The
-committed file in `reference/` is that digest.
+**Generation is deterministic — for short outputs, thoroughly verified.** The same
+clip and SOP has now reproduced byte-identically across:
+
+| varied | still identical? |
+|---|---|
+| two API keys in two different orgs, 25 min apart | ✅ |
+| budgets 8192 / 5760 / 5752 (the surplus is unused) | ✅ md5 `ed8116176e6e` |
+| **10 hours apart** | ✅ md5 `c592168b5c58` |
+| **two different blueprint versions** (pinned and canonical) | ✅ same digest |
+| **two runs launched 3 seconds apart** (an A/A test) | ✅ same digest |
+
+So a matching digest means an exact reproduction, and a differing one means something
+real changed. That is a strong result: it rules out platform drift, blueprint
+difference, and randomness as explanations for anything else in this document.
+
+⚠️ **But every one of those runs produced a ~800-byte output.** On the clip whose
+output runs to 3,675 bytes — right at the `</think>` boundary — the pinned and
+canonical blueprints **disagree**: one emitted 21 rows, the other rehearsed the same
+21 and dropped them. Determinism at that length is **untested**; an A/A pair on that
+clip is the experiment that would settle it. Until then, treat digests as reliable
+for outputs comfortably inside the budget and unproven for outputs near it.
 
 **Dev serializes these jobs.** Run 2 was submitted while run 1 held the GPU and
 waited **7 minutes** for it. Note the trap:
@@ -980,6 +995,36 @@ alone does not predict failure; clip difficulty interacts with it. But the
 direction is clear, and it means **`size` cannot currently be evaluated as a fix**:
 at `size: 448` the ceiling leaves 4,192 generation tokens, well under what the
 working runs used.
+
+#### Buying budget with frames backfires
+
+The remaining caller-side lever is to cut `max_frames`, freeing prompt tokens for
+reasoning. Tested on the clip that keeps failing:
+
+| frames | budget | thinking room | rehearsed rows |
+|---|---|---|---|
+| 64 | 5752 | — | **21** — the answer *was* formed |
+| 32 | 6536 | **+784** | **0** — no answer formed at all |
+
+**More thinking room made it worse.** At 64 frames the model reached the verdicts and
+lost them at `</think>`; at 32 frames, with 14% more budget, it spent everything and
+never produced a single verdict row.
+
+So the levers do not merely trade off — they oppose each other. The visual evidence
+appears to be what lets the reasoning *converge*, so halving the frames did not give
+the model more room to think, it gave it less to think **about**. Which closes the
+last caller-side option:
+
+| lever | outcome |
+|---|---|
+| raise `max_new_tokens` | capped at ~5,822 by the window — ~70 tokens of slack at 64 frames |
+| cut frames to free budget | **the model stops converging** |
+| raise `size` for detail | costs budget quadratically — tested, empty |
+| change the SOP wording | bare format gives 0 rehearsed rows too; a stricter one returns nothing |
+
+Nothing a caller can set fixes this clip. The fixes are `max_model_len` (documented,
+unwired), `repetition_penalty` or `stop` (unexposed), or emitting rehearsed rows
+instead of discarding them.
 
 **Do not guess a budget.** An earlier version of these scripts defaulted to a
 "safe-looking" 5120, which gave the model *less* room than the runs that worked, for
