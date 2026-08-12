@@ -183,92 +183,32 @@ Five properties, none of them documented in the blueprint:
 - **Unlike MGA, the output does NOT tile the timeline.** MGA segments
   contiguously, so every second must be labelled; TVA emits one row per SOP step
   and the rows can leave gaps. **TVA is verification, not segmentation.**
-- **`len(results)` is not the step count — rows can be duplicated.** One run
-  returned **nine rows for a three-step SOP**: the same three verdicts, emitted
-  three times, byte-identical in blocks. Collapse by `step` before scoring, and do
-  not assume one row per step. It was the only run at `max_new_tokens: 5120` while
-  the other eleven used 8192, so a smaller reserved budget is a suspect — but that
-  is one observation, not a demonstrated cause. `evaluate.py` collapses duplicates
-  and says so, and warns loudly if two rows for one step ever *disagree*.
+- **`len(results)` is not the step count — the model LOOPS and the parser keeps
+  every repetition.** One run returned **21 rows for a 3-step SOP**: a placeholder
+  block (`reason: "..."`, no timestamps) followed by the real answer emitted **six
+  more times**. Another returned 9. The parser regex-matches every occurrence
+  rather than stopping at one complete block, so collapse by `step` before scoring,
+  and prefer the informative row — a placeholder can arrive *first*.
 
-### JSON or JSONL? Both — and it matters when you merge
+  **This is not cosmetic. The loop consumes the budget the verdicts need**, which
+  makes it the likely root cause of the empty results rather than a separate quirk:
 
-Three things disagree about this, so it is worth stating plainly:
+  | same clip | repetition | outcome |
+  |---|---|---|
+  | at 5760 | 6 redundant blocks ≈ **788 tokens, 14% of the budget** | 21 rows, verdicts correct |
+  | at 8192 | ~12 blocks ≈ **1,575 tokens, inside `<think>`** | `</think>` never reached → **0 rows** |
 
-| | |
-|---|---|
-| the sink format | `jsonl/per-request` |
-| the filename the platform returns | `…__output_<clip>.`**`json`** |
-| the bytes on disk | **one** JSON object, **no trailing newline** |
+  So "the budget is too small" understates it: the model spends the window
+  re-emitting an answer it already has. **Tightening the SOP does not help** — the
+  SOP governs what is judged, not when generation stops, and the one stricter SOP
+  tried here returned zero rows. The levers that would fix it are decoding
+  parameters the engine supports and this blueprint does not expose:
 
-**JSONL is the format contract, not a description of these files.**
-`jsonl/per-request` means *one JSON record per request* — and a run here processes
-one video, so there is exactly one record, byte-identical to plain JSON. The `l`
-only materialises when a run has several source inputs, where you get one line per
-input. This repo names its copies `.jsonl` after the sink format; the platform's
-`.json` is why an earlier version of `--collect` saved files as
-`<clip>.json.jsonl`.
-
-**The extension is not derived from the sink format, and it changed mid-session.**
-The same pinned blueprint, with `format: jsonl/per-request` throughout, emitted
-both:
-
-| run | UTC | emitted |
-|---|---|---|
-| `agt_7xa5n8yy…` | 21:46 | `…_1_pass_2_pass_3_pass_A.`**`jsonl`** |
-| `agt_2jcbx7ka…` | 23:37 | `…_1_pass_2_pass_3_pass_A.`**`json`** |
-
-Nothing caller-side differed. And the declared format does not predict the
-extension in either agent: `mga` declares `json/per-request` and emitted `.jsonl`
-at 19:57, while `tva` declares `jsonl/per-request` and emitted `.jsonl` then
-`.json`. So **the two agents do not use different formats by design** — MGA's
-`.jsonl` artifact simply predates a platform-side change that TVA's `.json`
-follows.
-
-Two consequences: **do not key anything off the output extension** (match on
-`__output_` and strip whatever suffix is there — `--collect` does), and treat the
-`format` value as a contract about record structure rather than about filenames.
-
-The consequence is a real trap. **Because there is no trailing newline,
-concatenating outputs corrupts them:**
-
-```
-cat out_A.jsonl out_B.jsonl > merged.jsonl   # ONE line, two objects, parses as neither
-# json.decoder.JSONDecodeError: Extra data: line 1 column 726
-```
-
-Read each file separately — `evaluate.py` and `--show` take a list of paths and
-read line by line, so neither trap reaches them — or add the newline when merging.
-
-## The end-to-end example, stage by stage
-
-```
-video + SOP ─► 1 select ─► 2 write the SOP ─► 3 configure ─► 4 run ─► 5 evaluate
-              (labels)     (the ONLY lever)   (2 values)    (platform)  (offline)
-                                ▲
-                    there is no `prompt` on this
-                    blueprint — the SOP is the prompt
-```
-
-Five stages, and the middle one is where the work is. RED and OSM spend most of
-theirs producing a fitted classifier; TVA is zero-shot, so what replaces that is
-**SOP authoring**. There is no `prompt` value to tune, no format instruction to
-get wrong, and exactly two generation values worth setting.
-
-| Stage | Script | Needs |
-|---|---|---|
-| 1 Select clips | `sweep.py --list` | nothing |
-| 2 Write the SOP | `sop/oring.txt` | nothing |
-| 3 Configure | `run_tva_example.py --dry-run` | nothing |
-| 4 Run | `run_tva_example.py` / `sweep.py` | dev API key |
-| 5 Evaluate | `evaluate.py` | nothing |
-
-## Prerequisites
-
-Notably short: **no `atai_core` checkout, no GPU, no AWS, no `ffmpeg`, no
-`yt-dlp`.** TVA is zero-shot, the blueprint pins its own models, and the clips are
-local files rather than YouTube ids — so unlike the MGA example there is no
-download step that can silently half-succeed.
+  | lever | status |
+  |---|---|
+  | `repetition_penalty` | ❌ not exposed on `tva` — was wired on MGA's superseded `blp_76kyqm…` |
+  | `stop` | ❌ same |
+  | parser halting after one complete block | platform-side |
 
 - `.env` in the repo root:
 
@@ -1133,16 +1073,24 @@ Observations for the author, not defects.
 2. **Validate the graph before loading models, not after.** A blueprint that
    cannot instantiate currently costs the full ~7-minute cold start; connector and
    node-config validation up front turns 996 s into about 1 s.
-3. **Do not discard rehearsed rows on an unterminated reasoning block.** One run
+3. **Expose `repetition_penalty` and `stop`, and halt the parser after one
+   complete block.** The model loops: one run re-emitted the same 3-verdict block
+   six extra times (~788 tokens, 14% of its budget), and the same clip at a higher
+   budget looped ~12 times inside `<think>` and produced nothing. That makes
+   repetition the likely cause of the empty results rather than a cosmetic quirk,
+   and both levers were demonstrably wireable — MGA's superseded blueprint carried
+   them. No SOP wording can substitute, because the SOP governs what is judged and
+   not when generation stops.
+4. **Do not discard rehearsed rows on an unterminated reasoning block.** One run
    dropped **37 candidate verdict rows** because `</think>` never arrived inside
    the budget. The answer had been formed; emitting those rows with a
    `truncated: true` marker would turn a total loss into a usable, flagged result.
-4. **Treat an empty `results` list as a failure, not a completed job.** The parser
+5. **Treat an empty `results` list as a failure, not a completed job.** The parser
    already emits a WARN naming the cause; promoting it to ERROR, or surfacing a
    `rows_emitted: 0` field, would stop a silent empty result reading as success.
    This matters more for TVA than for MGA because the overflow correlates with the
    inputs that contain defects.
-5. **Expose `max_model_len` — the doc already specifies it.** Not a feature
+6. **Expose `max_model_len` — the doc already specifies it.** Not a feature
    request: the design doc's fusion-parameter list defines `max_model_len` as the
    context window "which includes input and output tokens", and the blueprint does
    not wire it. At 8192 total, with ~1,600 spent on a
