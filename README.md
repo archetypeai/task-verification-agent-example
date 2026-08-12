@@ -1076,6 +1076,49 @@ WARN  … generation ended inside the model's reasoning block (no `</think>`),
 **Thirty-seven candidate verdicts existed and were discarded.** The answer was
 formed; the window ran out before it could be closed.
 
+#### `dropping N rehearsed row(s)` is the diagnostic to read
+
+That number is the most useful thing the platform exposes about an empty result, and
+nothing points you at it. It distinguishes two failures that look identical from
+outside:
+
+| N | what happened | does a bigger budget help? |
+|---|---|---|
+| **> 0** | the model **formed** the verdicts inside `<think>` and they were thrown away when `</think>` never arrived | the answer already existed — recoverable in principle without any extra budget |
+| **0** | the model never produced a single verdict row within the budget | plausibly yes — it never got there |
+
+Observed across the empty results here: **37**, **21**, **0**, **0**. And two of the
+nine empties carried no WARN at all, which is a *third* mode — the parser matched
+nothing — where the budget is not implicated.
+
+**The clearest case shows the repetition is self-defeating.** The same clip at the
+same 5752 budget, on two blueprints that produce byte-identical output on an easy
+clip:
+
+| | rows | `</think>` | rehearsed |
+|---|---|---|---|
+| pinned blueprint | **emitted 21** | closed | — |
+| canonical blueprint | **0** | never reached | **21 dropped** |
+
+Identical content — seven blocks of three verdicts — and the only difference is
+whether the budget lasted long enough to close the block. Those seven blocks cost
+roughly **900 tokens of pure repetition**, which is what exhausted the budget in the
+first place. So the WARN's advice to *"raise `max_new_tokens`"* treats the symptom:
+**the reasoning is long because it repeats, and the repetition consumes the budget
+that would let it finish.**
+
+Two consequences for anyone tuning this:
+
+- **Read the WARN before raising the budget.** `N > 0` means the answer was formed
+  and discarded; more budget is not obviously the fix. No WARN at all means the
+  budget is not implicated.
+- **At `max_frames: 64` there is nothing left to raise** — 5752 is already ~99% of
+  the 8192 window once the prompt is subtracted. Real headroom requires fewer frames
+  (16 frames buys ~1,176 tokens, ~20%), which trades away the visual evidence the
+  verdicts depend on.
+
+
+
 The clip is what makes it fail, not the setting: this one has **both** step 1 and
 step 3 skipped, and the model reasons far longer about absences than about a clean
 pass. An all-correct clip fits easily and will not reproduce it. That asymmetry is
