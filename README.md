@@ -10,6 +10,11 @@ takes where the operator deliberately skips steps. A developer wants to know
 whether TVA catches the skipped ones — not whether it can describe a video that
 went fine.
 
+**It half does, and the half it fails is the dangerous one.** Across 11 scored
+clips it caught the omitted wrench **3 of 3 times** and the omitted o-ring **0 of
+6** — passing work that was not done, with confident invented detail about fitting
+a part that was never fitted. [Full results below.](#results--12-clips-and-one-finding-that-matters-more-than-the-accuracy)
+
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
 (`newton-fusion:1.0` and `whisper:large-v3`), so like
@@ -508,43 +513,129 @@ per-step ground-truth spans in these filenames. Intervals are printed and sanity
 checked (end-before-start, zero-length), never scored. **Read the absence of an
 IoU column as "unmeasured", not as "localises perfectly".**
 
-### Results so far — one clip, and an honest gap
+### Results — 12 clips, and one finding that matters more than the accuracy
 
-**This section is deliberately incomplete.** A 12-clip sweep is running; until it
-lands, the only successful runs are on the all-pass clip:
+All twelve clips, one SOP, `max_frames: 64`, `max_new_tokens: 8192`. Committed
+under [`reference/sweep/`](reference/sweep), so this is re-scorable offline:
 
-```
-clip                                    step 1           step 2           step 3
-1_pass_2_pass_3_pass_A               PASS>PASSED OK   PASS>PASSED OK   PASS>PASSED OK
-overall step accuracy: 3/3 (100.0%)
+```sh
+python3 evaluate.py reference/sweep/*.jsonl
 ```
 
-with reasons that cite what is on screen:
+```
+clip                                    step 1            step 2            step 3
+1_fail_2_pass_3_fail_A              FAIL>none   !!    PASS>none   !!    FAIL>none   !!
+1_fail_2_pass_3_pass_A              FAIL>PASSED !!    PASS>PASSED OK    PASS>PASSED OK
+1_fail_2_pass_3_pass_B              FAIL>PASSED !!    PASS>PASSED OK    PASS>PASSED OK
+1_fail_2_pass_3_pass_C              FAIL>none   !!    PASS>none   !!    PASS>none   !!
+1_fail_2_pass_3_pass_E              FAIL>PASSED !!    PASS>PASSED OK    PASS>PASSED OK
+1_pass_2_pass_3_fail_A              PASS>PASSED OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_fail_B              PASS>PASSED OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_fail_C              PASS>PASSED OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_pass_A              PASS>PASSED OK    PASS>PASSED OK    PASS>PASSED OK
+1_pass_2_pass_3_pass_B              PASS>PASSED OK    PASS>PASSED OK    PASS>PASSED OK
+1_pass_2_pass_3_pass_C              PASS>PASSED OK    PASS>PASSED OK    PASS>PASSED OK
+
+overall step accuracy: 24/33 (72.7%)
+step 1: 6/11 (55%)   step 2: 9/11 (82%)   step 3: 9/11 (82%)
+status distribution: PASSED=24, FAILED=0, MISSING=3
+```
+
+**Ignore the 72.7%.** It averages a step with no negative examples (step 2) against
+two that behave completely differently, and the difference between them is the
+whole result:
+
+| omitted step | what is missing on screen | detections |
+|---|---|---|
+| **step 3 — the wrench** | a large steel tool that never enters frame | **3 of 3** ✅ |
+| **step 1 — the o-ring** | a ~10 mm black ring, absent from a hand movement | **0 of 6** ❌ |
+
+**Every single clip where the o-ring was skipped went undetected** — three as false
+PASSES, two as empty results, one as an infrastructure error. Not one was caught.
+
+#### It does not hedge on the o-ring — it confabulates the action
+
+The three false passes describe, in detail, an installation that never happened:
 
 ```
-step 1  PASSED  [  2.0 -   9.0s]  The video clearly shows the person picking up the blue
-                                  cap and O-ring, then installing the O-ring onto the cap.
-step 2  PASSED  [  9.0 -  20.0s]  The person picks up the manifold and threads the blue
-                                  cap onto it by hand until it is snug.
-step 3  PASSED  [ 20.0 -  27.0s]  The person uses a wrench to tighten the blue cap.
+1_fail_2_pass_3_pass_A   PASSED [2.0-5.0s]   "…picking up the blue cap and O-ring, then
+                                              placing the O-ring into the groove of the blue cap."
+1_fail_2_pass_3_pass_B   PASSED [1.0-6.0s]   "…picking up the blue cap and O-ring, STRETCHING the
+                                              O-ring, and placing it onto the cap groove."
+1_fail_2_pass_3_pass_E   PASSED [3.0-14.0s]  "…picking up the blue cap and installing the rubber
+                                              O-ring onto it."
 ```
 
-**Do not read that as 100% accuracy.** Three PASSED verdicts on a clip where
-everything was done correctly is exactly what a model that always answers PASSED
-would produce. The number that matters is on the failure clips, and it is not in
-yet — the one attempt so far returned nothing at all, because `max_new_tokens:
-2048` was exhausted inside the reasoning block.
+"Stretching the O-ring" is a specific, plausible, entirely invented observation.
+**A reason field that reads as careful evidence is not evidence that the model
+looked.** Compare the wrench, where it correctly reasons from *absence*:
 
-What the passing run *does* establish, which is not nothing:
+```
+1_pass_2_pass_3_fail_A   MISSING  "The video ends immediately after the cap is threaded on by
+                                   hand; no wrench is shown and no tightening action takes place."
+```
 
-- the SOP reached the model and was segmented into three steps
-- the verdicts are per-step, timestamped, and carry reasons grounded in the video
-  (the *"blue cap"* was never mentioned in the SOP)
-- generation is deterministic, byte-for-byte across two orgs
+That asymmetry is the deployable conclusion: **TVA is reliable for "was this tool
+used" and unreliable for "was this small part fitted"** — and it fails in the
+dangerous direction, passing work that was not done. On this evidence, do not
+deploy it as an unattended gate on small-part steps. `max_frames: 64` on a 21 s
+clip samples every 0.33 s, so this is not a sampling artifact; every frame is
+resized to 224×224, which is the more likely culprit.
 
-When the sweep completes, this section gets the full table: per-step accuracy,
-the confusion matrix, and the FAILED-vs-MISSING split on the six clips where a
-step was skipped.
+**`FAILED` was never emitted once** — 24 PASSED, 3 MISSING, 0 FAILED. That matches
+what the clips contain (omissions, not botched attempts), so the status choice is
+correct; it also means nothing here exercises `FAILED`.
+
+#### 8192 tokens is still not always enough
+
+Two clips returned `results: []` at 8192, and both are `1_fail` clips. The log on
+the hardest one — both steps 1 and 3 skipped — is the most revealing line in this
+whole example:
+
+```
+WARN  TaskVerificationResultsParserNode: generation ended inside the model's reasoning
+      block (no `</think>`), so it never produced an answer; DROPPING 37 REHEARSED ROW(S).
+```
+
+**The model produced 37 candidate verdict rows inside its reasoning and every one
+was discarded**, because the closing `</think>` never arrived within the budget.
+The answer existed; the harness threw it away. Note also 1174 s of runtime for a
+21-second clip — the reasoning is where the time goes.
+
+Combined with the false passes above: **the clips that defeat the token budget are
+the same clips that contain the most defects.** Difficulty, reasoning length and
+defect count all move together, so the failures cluster precisely where a
+verification agent is supposed to earn its keep.
+
+#### One infrastructure failure, reported as a completed job
+
+`1_fail_2_pass_3_pass_F` never ran:
+
+```
+ERROR  skipping video "1_fail_2_pass_3_pass_F.mp4": downloading video "s3://…" failed
+       …
+       job.completed  Job completed in 440s
+```
+
+`job.completed`, an ERROR row, and no results. A caller reading the job verdict
+sees success; `sweep.py --collect` reports `no results yet`. Judge from the ERROR
+row.
+
+#### What this example does and does not establish
+
+Establishes, on 11 scored clips of one task:
+
+- the mechanics end to end, including the runtime SOP path
+- **an asymmetric, reproducible blind spot** — 0/6 on the small part, 3/3 on the tool
+- that the `reason` field can be fluent and wrong, so it cannot be used as a
+  confidence signal
+- that the reasoning budget fails on the hardest inputs, and drops verdicts it
+  had already formed
+
+Does **not** establish: accuracy on other tasks, on longer videos, on
+attempted-but-botched steps (`FAILED` never fired), or with a different SOP
+wording. One task, one operator, one camera angle. **Treat 0/6 as a red flag worth
+reproducing, not as a measured error rate.**
 
 ## Platform behavior worth knowing
 
@@ -587,6 +678,14 @@ step was skipped.
 - **The reasoning block shares the output budget**, so the tokens a run needs
   depend on how hard the judgement is — and the clips containing a defect need
   more than the clean ones.
+- **A run can log an ERROR and still report `job.completed`.** One clip failed to
+  download from S3 and never ran; the job reported completed after 440 s with an
+  ERROR row and no results. Judge from the ERROR row, not the verdict.
+- **Runs are not admitted, or executed, in submission order.** Twelve runs
+  submitted together sat **~60 minutes with none admitted**, then completed out of
+  order over ~90 minutes. Admission is capacity-gated, not a formality, so
+  submitting a batch up front does not reserve an order — only that the work
+  eventually happens.
 - **No progress events during processing.** Between `input_started` and the
   terminal event there is nothing — no frame count, no transcript length, no
   per-node timing.
@@ -616,30 +715,40 @@ Observations for the author, not defects.
 
 ## Recommendations
 
+0. **Investigate the small-part blind spot before anyone deploys this as a gate.**
+   0 of 6 detections on an omitted o-ring, with fluent invented descriptions of it
+   being fitted, against 3 of 3 on an omitted wrench. `size: 224` is the obvious
+   suspect — a ~10 mm ring is a handful of pixels — so exposing `size`, or a
+   region-of-interest crop, is the first thing worth testing. This is a
+   correctness issue, not a configuration one.
 1. **Fix the sink format on the canonical `tva` blueprint** — `json/per-request`
    has no registered connector, so the blueprint that ships cannot emit output.
    Highest priority: it makes the agent unusable via its own key.
 2. **Validate the graph before loading models, not after.** A blueprint that
    cannot instantiate currently costs the full ~7-minute cold start; connector and
    node-config validation up front turns 996 s into about 1 s.
-3. **Treat an empty `results` list as a failure, not a completed job.** The parser
+3. **Do not discard rehearsed rows on an unterminated reasoning block.** One run
+   dropped **37 candidate verdict rows** because `</think>` never arrived inside
+   the budget. The answer had been formed; emitting those rows with a
+   `truncated: true` marker would turn a total loss into a usable, flagged result.
+4. **Treat an empty `results` list as a failure, not a completed job.** The parser
    already emits a WARN naming the cause; promoting it to ERROR, or surfacing a
    `rows_emitted: 0` field, would stop a silent empty result reading as success.
    This matters more for TVA than for MGA because the overflow correlates with the
    inputs that contain defects.
-4. **Consider a separate reasoning budget, or reserving tokens for the answer.**
+5. **Consider a separate reasoning budget, or reserving tokens for the answer.**
    Sharing one budget between `<think>` and the verdicts means a harder judgement
    can cost you the answer entirely. Reserving enough for N rows would fail
    gracefully — truncated reasoning, verdicts intact.
-5. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section
+6. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section
    is the temporal compression algorithm, with a documented 70% compression and
    25% performance gain, and none of it is reachable from a bundle.
-6. **Document that `step` is 0-based** in the output schema. Human-authored SOPs
+7. **Document that `step` is 0-based** in the output schema. Human-authored SOPs
    are 1-based, and the mismatch fails quietly.
-7. **Emit progress events during processing.** Between `input_started` and the
+8. **Emit progress events during processing.** Between `input_started` and the
    terminal event there is nothing across 5–6 minutes, so neither a failure nor
    the time spent can be attributed.
-8. **Reconsider loading whisper when the video has no audio track.** It costs ~40 s
+9. **Reconsider loading whisper when the video has no audio track.** It costs ~40 s
    of every run here and contributes nothing.
 
 ## Repo layout
@@ -658,6 +767,13 @@ Observations for the author, not defects.
 
 - **An audio-bearing clip.** The whisper half of the pipeline is loaded on every
   run and exercised by none of these.
+- **A `size` sweep, which is now the most valuable experiment here.** The o-ring
+  blind spot is most likely a resolution problem: at `size: 224` a ~10 mm ring is a
+  few pixels. `size` is exposed and honoured, and `null` keeps the source
+  resolution — so this is one bundle value away from being tested.
+- **A clip with a step attempted and done WRONG.** `FAILED` never fired across 12
+  clips because every failure here is an omission, so that third status is
+  completely unexercised.
 - **A `max_frames` sweep.** 64 vs the blueprint's 16 is the obvious first
   comparison on 21–43 s clips, and `sweep.py --max-frames 16` runs it.
 - **Timestamp scoring.** Would need per-step ground-truth intervals, which the

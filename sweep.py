@@ -136,7 +136,10 @@ def collect(out_dir: str, bundle_id: str | None = None,
         inner = items[0].get("data") or {}
         # The output filename carries the clip: agt_<id>__output_<clip>.jsonl
         name = str(inner.get("filename") or "")
-        stem = name.split("__output_", 1)[-1].removesuffix(".jsonl") or aid
+        # The platform names outputs "<agent>__output_<clip>.json" — .json, not
+        # .jsonl, despite the content being JSONL. Strip whatever extension is
+        # there rather than one specific suffix, or you get "<clip>.json.jsonl".
+        stem = os.path.splitext(name.split("__output_", 1)[-1])[0] or aid
         out_path = os.path.join(out_dir, f"tva-output-{stem}.jsonl")
         if os.path.exists(out_path):
             skipped += 1
