@@ -354,7 +354,20 @@ def check_sink(doc: dict) -> str | None:
 # `max_new_tokens` is RESERVED UP FRONT, so it is not a cap on what may be
 # generated — it is subtracted from the window before generation starts. The check
 # fires at fusion time, AFTER ~7 minutes of model loading.
-MAX_SEQ_LEN = 8192
+# CHANGED UNDER US. Measured at 8192 on 2026-08-11: a run at max_new_tokens 8191
+# with a 2368-token prompt was rejected with "prompt 2368 tokens + 8191 reserved for
+# generation exceeds max_seq_len=8192". On 2026-08-12 a run with prompt 2376 +
+# max_new_tokens 6928 = 9304 completed cleanly, with no warning — so the window is
+# now larger than 9304 and this constant was refusing valid configurations.
+#
+# The node schema's own ceiling is 262144 (256K), which matches the context the
+# design doc advertises, so the served window may now be anywhere in (9304, 262144].
+# It is NOT exposed as a bundle value, so it cannot be read — only bracketed by
+# runs. Treated as a floor rather than a limit: the preflight now warns instead of
+# refusing, because a stale constant that blocks good work is worse than one that
+# lets a bad run through.
+MAX_SEQ_LEN_KNOWN_GOOD = 9304        # observed to work
+MAX_SEQ_LEN = 262144                 # the schema ceiling; the real limit is unknown
 
 # Vision token arithmetic for the preprocessor defaults (patch 16, merge 2,
 # temporal patch 2, size 224): each temporal step is (224/16/2)^2 = 49 tokens, and
@@ -413,8 +426,8 @@ def max_usable_new_tokens(max_frames: int, size: int = 224,
     a different system message) — being rejected at fusion time costs the whole
     cold start, so a few dozen tokens of slack is cheap insurance.
     """
-    return max(256, MAX_SEQ_LEN - estimate_prompt_tokens(max_frames, size, sop)
-               - margin)
+    return max(256, MAX_SEQ_LEN_KNOWN_GOOD
+               - estimate_prompt_tokens(max_frames, size, sop) - margin)
 
 
 def check_token_budget(max_frames: int, max_new_tokens: int,
@@ -426,15 +439,21 @@ def check_token_budget(max_frames: int, max_new_tokens: int,
     ~7-minute cold start and produces no output.
     """
     prompt = estimate_prompt_tokens(max_frames, size, sop)
-    if prompt + max_new_tokens <= MAX_SEQ_LEN:
+    total = prompt + max_new_tokens
+    if total <= MAX_SEQ_LEN_KNOWN_GOOD:
         return None
-    usable = MAX_SEQ_LEN - prompt
-    return (f"prompt (~{prompt} tokens at max_frames={max_frames}, size={size}) + "
-            f"max_new_tokens ({max_new_tokens}) exceeds max_seq_len="
-            f"{MAX_SEQ_LEN}.\n"
-            f"    The run would die at fusion time, after ~7 min of model loading.\n"
-            f"    At max_frames={max_frames}, max_new_tokens must be <= {usable}. "
-            f"Lower it, or use fewer frames.")
+    if total > MAX_SEQ_LEN:
+        return (f"prompt (~{prompt}) + max_new_tokens ({max_new_tokens}) = {total} "
+                f"exceeds the node schema's ceiling of {MAX_SEQ_LEN}. This is "
+                f"rejected at blueprint resolution.")
+    # Between the known-good floor and the schema ceiling the served window is
+    # unknown, so this is a caution rather than a refusal.
+    return (f"prompt (~{prompt}) + max_new_tokens ({max_new_tokens}) = {total} "
+            f"exceeds {MAX_SEQ_LEN_KNOWN_GOOD}, the largest total OBSERVED to work.\n"
+            f"    The served max_seq_len is not exposed and has been raised at least "
+            f"once, so this may be fine.\n"
+            f"    If it is not, the run dies at fusion time after ~7 min with "
+            f"'exceeds max_seq_len=<N>' — and <N> is worth reporting.")
 
 
 def create_bundle(blueprint: str, name: str, values: dict) -> dict:

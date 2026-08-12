@@ -355,7 +355,7 @@ def main() -> None:
         print(f"  WARNING: {inert} is not wired and will be silently ignored.")
     budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size, sop=args.sop)
     if budget_warning:
-        sys.exit(f"REFUSING TO RUN: {budget_warning}")
+        print(f"  ** {budget_warning}")
     sink_warning = api.check_sink(bp["document"])
     if sink_warning:
         # Refuse rather than warn: a sweep would repeat the same doomed cold

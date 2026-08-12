@@ -588,9 +588,6 @@ def main() -> None:
     budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size, sop=args.sop)
     if budget_warning:
         print(f"  ** {budget_warning}")
-        if not args.force:
-            sys.exit("refusing to start a run that cannot fit in the context "
-                     "window. Pass --force to do it anyway.")
     sink_warning = api.check_sink(doc)
     if sink_warning:
         print(f"  ** {sink_warning}")

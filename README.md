@@ -945,8 +945,25 @@ ERROR  preparing Newton request: estimated prompt 2368 tokens + 8191 reserved fo
 ```
 
 So **`max_new_tokens` is RESERVED UP FRONT**, not a cap on what may be produced:
-the real rule is `prompt + max_new_tokens <= max_seq_len`, with `max_seq_len` at
-**8192** and not exposed as a bundle value. The prompt is measured, so the ceiling
+the real rule is `prompt + max_new_tokens <= max_seq_len`.
+
+⚠️ **`max_seq_len` was 8192 and has since been raised — it is not exposed, so it can
+only be bracketed by runs.** On 2026-08-11 a run at `max_new_tokens: 8191` with a
+2,368-token prompt was rejected for exceeding 8192. On 2026-08-12 a run with prompt
+2,376 + `max_new_tokens` 6,928 = **9,304 completed cleanly with no warning.** So the
+served window is now somewhere in **(9304, 262144]** — the upper bound being the node
+schema's ceiling, which matches the doc's 256K.
+
+**This invalidated a guardrail in this repo**, and the failure mode is worth copying
+down: `check_token_budget()` hardcoded 8192 and *refused* the 6,928 configuration as
+impossible. It was valid. A preflight built on a measured constant becomes wrong the
+moment the platform moves, and it fails in the worst direction — blocking good work
+while sounding certain. It now treats 9,304 as a **known-good floor** and warns above
+it rather than refusing, and it says the served limit is unknown.
+
+Everything below about the 8192 ceiling was measured while it held, and the empty
+results it explains were real. Whether a larger window fixes them is **untested** —
+the clip that returns nothing has not been re-run with a budget above 5,822. The prompt is measured, so the ceiling
 is computable:
 
 | `max_frames` | prompt (tokens) | max usable `max_new_tokens` |
