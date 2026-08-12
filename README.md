@@ -706,31 +706,39 @@ whole result:
 |---|---|
 | **the wrench** — a large steel tool that never enters frame | **3 of 3** ✅ |
 | **the o-ring, when it is the ONLY thing missing** | **0 of 4** ❌ |
-| **the o-ring, when the wrench is ALSO missing** | 1 of 3 attempts produced output at all; that one was correct ⚠️ |
+| **the o-ring, when the wrench is ALSO missing** | **2 of 2** ✅ — but only at `numbered @~5755`; other configs return nothing |
 
-**But the same clip is unstable, so read the ✅ row cautiously.** A later run did
-detect the o-ring correctly, with a precise reason — *"The installation of the
-O-ring into the blue cap is not shown in the video."* — and that is a real
-observation. It is also **one of three attempts on that clip, the other two of
-which returned nothing at all**:
+**The o-ring CAN be detected — reproducibly — but only under one configuration.**
+A run on the double-omission clip returned the correct verdicts with a precise
+reason (*"The installation of the O-ring into the blue cap is not shown in the
+video."*), and a repeat at a near-identical budget produced **byte-identical
+output**. Two of two.
 
-| clip | SOP | budget | result |
-|---|---|---|---|
-| `1_fail_2_pass_3_fail_A` | numbered | 8192 | **empty** — WARN, 37 rehearsed rows dropped |
-| `1_fail_2_pass_3_fail_A` | numbered | 5760 | **21 rows**, 3/3 correct |
-| `1_fail_2_pass_3_fail_A` | plain (documented) | 5758 | **empty** — no WARN |
+The full replication grid, four runs per clip:
 
-Three near-identical configurations, three different outcomes: nothing, a
-sevenfold loop with correct verdicts, and nothing again. **On this clip the
-behaviour sits on a knife edge**, and a 2-token change in budget is enough to flip
-it. So "1 of 1 detected" was too generous a reading of a single lucky run; the
-honest version is *1 of 3 attempts produced any verdicts, and that one was right.*
+| clip | numbered @8192 | numbered @5760 | numbered @5752 | plain @5758 |
+|---|---|---|---|---|
+| `1_pass_2_pass_3_pass_A` | 3 rows ✅ | 3 rows ✅ | 3 rows ✅ | 3 rows ✅ |
+| `1_fail_2_pass_3_fail_A` | **empty** | 21 rows ✅ | 21 rows ✅ | **empty** |
 
-What survives all of this is the part that repeated: **4 of 4 clips where the
-o-ring was the only omission returned a confident false PASS**, at two different
-budgets. That is the finding with consistent support. Whether a corroborating
-second omission genuinely helps is **unresolved** — the one supporting run cannot
-be reproduced, because that clip mostly returns nothing.
+Within a configuration the output is **byte-identical** — md5 `ed8116176e6e` for the
+easy clip across three budgets, md5 `3ef2d7fb07d8` for the hard clip across two. So
+**generation is deterministic; it is the configuration sensitivity that is
+extreme.** Raising the budget from 5760 to 8192 turns a correct answer into no
+answer at all, which is the opposite of what "more room to reason" suggests.
+
+Two consequences worth being blunt about:
+
+- **An earlier version of this README called this clip "unstable" and a "coin
+  flip".** That was wrong. Same input, same bytes, every time. The variation came
+  from the configurations being different, and the correction matters because
+  "unstable" would mean the numbers cannot be trusted, whereas "config-sensitive"
+  means they can — provided the configuration is stated with them.
+- **The non-documented SOP is the one that works on the hard clip.** `plain @5758`
+  returned empty where `numbered @5760` returned correct verdicts. That is a single
+  observation and not a conclusion, but it means adopting the documented format may
+  be a downgrade for precisely the defect-bearing inputs, and it should be tested
+  before anyone treats the format switch as an improvement.
 
 #### The reason for a real observation and an invented one are the SAME SENTENCE
 
