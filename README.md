@@ -1024,13 +1024,14 @@ the structural one.
 ## The SOP format decides whether you get an answer at all
 
 A controlled 2×2: same blueprint, same clips, `max_frames: 64`, `size: 224`, and
-**`max_new_tokens` pinned to 5752** so the SOP format is the only variable. Every
-cell was run 2–5 times and reproduced **byte-identically**.
+**`max_new_tokens` pinned to 5752** so the SOP format is the only variable. Each
+cell was run more than once and reproduced **byte-identically** — the digests below
+are stable, not one-off observations.
 
 | | `sop/oring-numbered.txt`<br>(`Step 1:` prefixes) | `sop/oring.txt`<br>(bare, the doc's format) |
 |---|---|---|
-| **`1_pass_2_pass_3_pass_A`**<br>all steps performed | 3 rows · **3/3 correct**<br>md5 `ed8116176e6e` (5×) | 3 rows · **3/3 correct**<br>md5 `c592168b5c58` (2×) |
-| **`1_fail_2_pass_3_fail_A`**<br>steps 1 and 3 skipped | 21 rows · **3/3 correct**<br>md5 `3ef2d7fb07d8` (3×) | **0 rows · no verdicts**<br>md5 `d131e7a67a85` (2×) |
+| **`1_pass_2_pass_3_pass_A`**<br>all steps performed | 3 rows · **3/3 correct**<br>md5 `ed8116176e6e` | 3 rows · **3/3 correct**<br>md5 `c592168b5c58` |
+| **`1_fail_2_pass_3_fail_A`**<br>steps 1 and 3 skipped | 21 rows · **3/3 correct**<br>md5 `3ef2d7fb07d8` | **0 rows · no verdicts**<br>md5 `d131e7a67a85` |
 
 **On the clip that contains defects, the SOP format decides whether there is any
 output.** The two formats differ only in a `Step N:` prefix on each line. The
