@@ -956,10 +956,15 @@ the structural one.
   unambiguous:
 
   ```
-  05:51:25  run A resolves inputs, pinning SOP object f7307e1d-…
-  05:53:45  run B uploads oring.txt again -> a new object replaces A's
-  later     run A executes -> its object is gone -> S3 object not found
+  run  resolved   pinned SOP object   killed by
+  A    05:51:25   f7307e1d…           B's upload of the same oring.txt at 05:53:45
+  B    05:53:45   c1f2ab91…           C's upload of the same oring.txt at 06:00:46
+  C    06:00:46   (current)           nothing after it — the only survivor
   ```
+
+  A chain of clobbers, each run destroying its predecessor's input, and **only the
+  last one survives**. All three uploads were byte-identical; the content never
+  changed, only the object behind the name.
 
   A run pins the object at input-resolution time, not at execution time, and dev
   queues runs for up to an hour — so any re-upload of the same name in that window
