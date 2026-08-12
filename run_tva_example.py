@@ -12,6 +12,10 @@ virtualenv, no GPU, no atai_core checkout.
     python3 run_tva_example.py --dry-run            # print the payloads, call nothing
     python3 run_tva_example.py --show out.jsonl     # re-read an output, no API calls
 
+    # reproduce the empty-output failure — the one worth recognising
+    python3 run_tva_example.py --repro-empty --offline   # free, no API key
+    python3 run_tva_example.py --repro-empty             # live, ~13 min
+
 Expect ~13 minutes (754-814 s observed): ~7 min of model download and load on
 EVERY run — nothing is cached between runs — then ~5 min of generation for a 30 s
 clip. Dev has one GPU and serializes these, so a concurrent run queues behind
@@ -125,6 +129,26 @@ def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
 
 # Statuses the TaskVerificationResultsParserNode emits, per the design doc.
 STATUSES = ("PASSED", "FAILED", "MISSING")
+
+# --repro-empty: the exact configuration that makes a run report success and
+# return no verdicts at all. Kept as a first-class mode because it is the failure
+# most worth recognising and the least visible: `job.completed`, no ERROR row, and
+# an empty `results` list.
+#
+# The clip matters as much as the setting. A clip where every step was performed
+# correctly fits comfortably in 2048 tokens; this one has step 3 SKIPPED, and the
+# model reasons much longer about an absence than about a clean pass — long enough
+# to spend the whole budget inside <think> and emit nothing.
+REPRO = {
+    "video": "data/clips/1_pass_2_pass_3_fail_A.mp4",
+    "max_frames": 64,
+    "size": 224,
+    "max_new_tokens": 2048,      # the blueprint's own historic default
+}
+# Byte-for-byte what that configuration produced, committed so the shape of the
+# failure can be inspected with no API key at all.
+REPRO_REFERENCE = "reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl"
+REPRO_EXPECTED_MD5 = "1b56135df5d1476c625e6aedfd18b91b"
 
 
 # Extensions a clip may carry. `ls data/clips` shows names WITH the extension, so
@@ -276,6 +300,77 @@ def _step_no(row: dict) -> int | None:
     return None if s is None else int(s) + (1 - STEP_BASE)
 
 
+def repro_symptoms(payload: bytes | None) -> list[tuple[str, bool, str]]:
+    """(description, reproduced, detail) for each symptom of the empty failure."""
+    records = [json.loads(l) for l in (payload or b"").decode(errors="replace").splitlines()
+               if l.strip()]
+    rows = [r for rec in records for r in (rec.get("results") or [])]
+    return [
+        ("a record IS returned (this is not a missing file)",
+         len(records) == 1, f"{len(records)} record(s)"),
+        ("it contains NO verdicts",
+         len(rows) == 0, f"{len(rows)} verdict(s)"),
+        ("the output is tiny (~44 bytes)",
+         payload is not None and len(payload) < 100, f"{len(payload or b'')} bytes"),
+    ]
+
+
+def repro_report(payload: bytes | None, verdict: str, agent_id: str) -> None:
+    """Print CONFIRMED / NOT REPRODUCED per symptom, and what it means."""
+    print("\n" + "=" * 72)
+    print("EMPTY-OUTPUT REPRODUCTION")
+    print("=" * 72)
+    results = repro_symptoms(payload)
+    for desc, ok, detail in results:
+        print(f"  {'CONFIRMED    ' if ok else 'NOT REPRODUCED'}  {desc}\n"
+              f"                  observed: {detail}")
+    # The verdict from the log stream matters as much as the bytes: the whole point
+    # is that the job does not report failure.
+    print(f"\n  run verdict from /logs: {verdict}")
+    if verdict == "empty-reasoning-overflow":
+        print("    -> the parser reported that generation ended inside the model's\n"
+              "       reasoning block, so no verdict was ever emitted. THIS is the\n"
+              "       diagnostic; the job itself reports completed.")
+    elif verdict == "completed":
+        print("    -> reported as a clean completion. Note there was no WARN about\n"
+              "       the reasoning block, so if the output is empty this is the\n"
+              "       OTHER empty-output mode: the parser matched nothing at all.")
+
+    if all(ok for _, ok, _ in results):
+        digest = hashlib.md5(payload).hexdigest()
+        print(f"\n  REPRODUCED. md5 {digest}")
+        print(f"    {'matches' if digest == REPRO_EXPECTED_MD5 else 'differs from'} "
+              f"the committed reference ({REPRO_EXPECTED_MD5})")
+        print("\n  Why it matters: nothing in the HTTP responses, the job status or\n"
+              "  the exit code distinguishes this from success. COUNT THE VERDICTS.\n"
+              "  And note which clips it strikes — the ones containing a defect need\n"
+              "  more reasoning than the clean ones, so a verification agent fails\n"
+              "  precisely on the inputs it was deployed to catch.")
+    else:
+        print("\n  NOT REPRODUCED — the run returned verdicts.\n"
+              "  The budget needed depends on the clip and on how much the model\n"
+              "  reasons, so this is not perfectly deterministic. Try\n"
+              "  --repro-empty on a clip with more than one skipped step, or lower\n"
+              "  --max-new-tokens further.")
+    print(f"\n  full log: {api.agents_base()}/instances/{agent_id}/logs")
+    print("=" * 72)
+
+
+def repro_analyse(path: str) -> None:
+    """Offline: report the same symptoms from the committed output. No API key."""
+    if not os.path.exists(path):
+        sys.exit(f"no committed reference at {path}")
+    payload = open(path, "rb").read()
+    print(f"analysing the committed output — no API key, no GPU\n  {path}\n")
+    print(f"  raw bytes: {payload.decode(errors='replace')}\n")
+    for desc, ok, detail in repro_symptoms(payload):
+        print(f"  {'CONFIRMED    ' if ok else 'NOT REPRODUCED'}  {desc}\n"
+              f"                  observed: {detail}")
+    print(f"\n  md5 {hashlib.md5(payload).hexdigest()}")
+    print("\n  This is what `job.completed` with no ERROR row can look like.\n"
+          "  Reproduce it live with:  python3 run_tva_example.py --repro-empty")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--video", default=VIDEO_PATH)
@@ -318,6 +413,17 @@ def main() -> None:
                     help="pretty-print an output file and stop — no API calls")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the exact payloads and stop — no API calls")
+    ap.add_argument("--repro-empty", action="store_true",
+                    help="reproduce the EMPTY-OUTPUT failure: a run that reports "
+                         "job.completed with no ERROR and returns no verdicts. "
+                         "Overrides --video/--max-frames/--size/--max-new-tokens "
+                         "with the configuration known to trigger it, then reports "
+                         "each symptom as CONFIRMED or NOT REPRODUCED. ~13 min of "
+                         "GPU. Add --offline to inspect the committed output "
+                         "instead, for free.")
+    ap.add_argument("--offline", action="store_true",
+                    help="with --repro-empty, analyse the committed reference "
+                         "output instead of running the agent. No API key needed.")
     ap.add_argument("--force", action="store_true",
                     help="run even if the blueprint's sink cannot be "
                          "instantiated (see check_sink) — normally that is a "
@@ -327,6 +433,27 @@ def main() -> None:
     if args.show:
         show(args.show)
         return
+
+    if args.repro_empty:
+        if args.offline:
+            repro_analyse(REPRO_REFERENCE)
+            return
+        print(__doc__.split("REPRODUCING")[0].strip().splitlines()[0])
+        print(f"\nREPRODUCING THE EMPTY-OUTPUT FAILURE\n"
+              f"  clip            {REPRO['video']}\n"
+              f"                  (step 3 SKIPPED — the wrench never appears)\n"
+              f"  max_new_tokens  {REPRO['max_new_tokens']}   <-- the cause\n"
+              f"  max_frames      {REPRO['max_frames']}, size {REPRO['size']}\n"
+              f"  SOP             {args.sop or DEFAULT_SOP_PATH} (unmodified)\n\n"
+              f"  Expect: job.completed, NO ERROR row, a WARN naming the model's\n"
+              f"  reasoning block, and results: [] — about 44 bytes.\n"
+              f"  A clip where every step was done correctly fits in 2048 and will\n"
+              f"  NOT reproduce this; the skipped step is what makes it reason long\n"
+              f"  enough to spend the budget before answering.\n")
+        args.video = REPRO["video"]
+        args.max_frames = REPRO["max_frames"]
+        args.size = REPRO["size"]
+        args.max_new_tokens = REPRO["max_new_tokens"]
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
@@ -426,6 +553,9 @@ def main() -> None:
         print(f"  saved {out_path} ({len(payload)} bytes, "
               f"md5 {hashlib.md5(payload).hexdigest()})")
         show(out_path, video=args.video)
+    if args.repro_empty:
+        repro_report(payload, verdict, agent_id)
+        return
     if verdict != "completed":
         sys.exit(f"run {verdict} — full log: "
                  f"{api.agents_base()}/instances/{agent_id}/logs")

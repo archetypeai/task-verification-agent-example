@@ -874,6 +874,49 @@ attempted-but-botched steps (`FAILED` never fired), or with a different SOP
 wording. One task, one operator, one camera angle. **Treat 0/6 as a red flag worth
 reproducing, not as a measured error rate.**
 
+## Reproducing the empty-output failure
+
+The failure most worth recognising is the one that looks like success:
+`job.completed`, no ERROR row, and no verdicts. `run_tva_example.py` reproduces it
+as a first-class mode and reports each symptom as CONFIRMED or NOT REPRODUCED.
+
+**Offline — instant, no API key, no GPU:**
+
+```sh
+python3 run_tva_example.py --repro-empty --offline
+```
+
+```
+  raw bytes: {"id":"1_pass_2_pass_3_fail_A","results":[]}
+
+  CONFIRMED      a record IS returned (this is not a missing file)
+  CONFIRMED      it contains NO verdicts
+  CONFIRMED      the output is tiny (~44 bytes)
+  md5 1b56135df5d1476c625e6aedfd18b91b
+```
+
+**Live — ~13 minutes:**
+
+```sh
+python3 run_tva_example.py --repro-empty
+```
+
+It pins the configuration that triggers it: `1_pass_2_pass_3_fail_A` at
+`max_new_tokens: 2048`, the blueprint's own historic default.
+
+**The clip matters as much as the setting**, and this is the part worth
+internalising: a clip where every step was performed correctly fits inside 2048
+tokens and will *not* reproduce this. This clip has step 3 skipped, and the model
+reasons far longer about an absence than about a clean pass — long enough to spend
+the whole budget inside `<think>` and emit nothing. So the reproduction is also a
+demonstration of the deployment risk: **the runs that fail are the ones containing
+a defect.**
+
+If it does not reproduce, that is expected variance rather than a broken script —
+the budget needed depends on the clip and on how much the model reasons. Try a clip
+with two skipped steps (`1_fail_2_pass_3_fail_A`) or lower `--max-new-tokens`
+further.
+
 ## Platform behavior worth knowing
 
 - **The `/agents` API is dev-only.** Prod 404s on every `/agents` path; a prod key
@@ -1004,7 +1047,7 @@ Observations for the author, not defects.
 
 | Path | What it is |
 |---|---|
-| `run_tva_example.py` | **Start here.** Single-clip end-to-end run: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--dry-run` and `--show` need no key. |
+| `run_tva_example.py` | **Start here.** Single-clip end-to-end run: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--repro-empty` reproduces the empty-output failure and reports each symptom as CONFIRMED / NOT REPRODUCED. `--dry-run`, `--show` and `--repro-empty --offline` need no key. |
 | `sop/oring.txt` | The SOP, one step per line. Edit this to change the procedure — no Python involved. |
 | `sweep.py` | Batch path over many clips, reusing one bundle. Sequential by default so a misconfiguration costs one run, not twelve; `--submit-all` instead claims every queue slot up front. `--collect` harvests finished runs after a disconnect and `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
