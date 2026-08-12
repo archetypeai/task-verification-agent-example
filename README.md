@@ -10,10 +10,10 @@ takes where the operator deliberately skips steps. A developer wants to know
 whether TVA catches the skipped ones — not whether it can describe a video that
 went fine.
 
-**It half does, and the half it fails is the dangerous one.** Across 11 scored
-clips it caught the omitted wrench **3 of 3 times** and the omitted o-ring **0 of
-6** — passing work that was not done, with confident invented detail about fitting
-a part that was never fitted. [Full results below.](#results--12-clips-and-one-finding-that-matters-more-than-the-accuracy)
+**It half does, and the half it fails is the dangerous one.** Across all 12 clips
+it caught the omitted wrench **3 of 3 times** and the omitted o-ring **0 of 6** —
+passing work that was not done, with confident invented detail about fitting a part
+that was never fitted. [Full results below.](#results--12-clips-and-one-finding-that-matters-more-than-the-accuracy)
 
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
@@ -182,6 +182,13 @@ Five properties, none of them documented in the blueprint:
 - **Unlike MGA, the output does NOT tile the timeline.** MGA segments
   contiguously, so every second must be labelled; TVA emits one row per SOP step
   and the rows can leave gaps. **TVA is verification, not segmentation.**
+- **`len(results)` is not the step count — rows can be duplicated.** One run
+  returned **nine rows for a three-step SOP**: the same three verdicts, emitted
+  three times, byte-identical in blocks. Collapse by `step` before scoring, and do
+  not assume one row per step. It was the only run at `max_new_tokens: 5120` while
+  the other eleven used 8192, so a smaller reserved budget is a suspect — but that
+  is one observation, not a demonstrated cause. `evaluate.py` collapses duplicates
+  and says so, and warns loudly if two rows for one step ever *disagree*.
 
 ### JSON or JSONL? Both — and it matters when you merge
 
@@ -578,6 +585,7 @@ clip                                    step 1            step 2            step
 1_fail_2_pass_3_pass_B              FAIL>PASSED !!    PASS>PASSED OK    PASS>PASSED OK
 1_fail_2_pass_3_pass_C              FAIL>none   !!    PASS>none   !!    PASS>none   !!
 1_fail_2_pass_3_pass_E              FAIL>PASSED !!    PASS>PASSED OK    PASS>PASSED OK
+1_fail_2_pass_3_pass_F              FAIL>PASSED !!    PASS>PASSED OK    PASS>PASSED OK
 1_pass_2_pass_3_fail_A              PASS>PASSED OK    PASS>PASSED OK    FAIL>MISSING OK
 1_pass_2_pass_3_fail_B              PASS>PASSED OK    PASS>PASSED OK    FAIL>MISSING OK
 1_pass_2_pass_3_fail_C              PASS>PASSED OK    PASS>PASSED OK    FAIL>MISSING OK
@@ -585,9 +593,10 @@ clip                                    step 1            step 2            step
 1_pass_2_pass_3_pass_B              PASS>PASSED OK    PASS>PASSED OK    PASS>PASSED OK
 1_pass_2_pass_3_pass_C              PASS>PASSED OK    PASS>PASSED OK    PASS>PASSED OK
 
-overall step accuracy: 24/33 (72.7%)
-step 1: 6/11 (55%)   step 2: 9/11 (82%)   step 3: 9/11 (82%)
-status distribution: PASSED=24, FAILED=0, MISSING=3
+overall step accuracy: 26/36 (72.2%)
+step 1: 6/12 (50%)   step 2: 10/12 (83%)   step 3: 10/12 (83%)
+step 1 confusion: TP=6 TN=0 FP=4 FN=0 — all four errors are FALSE PASSES
+status distribution: PASSED=26, FAILED=0, MISSING=3
 ```
 
 **Ignore the 72.7%.** It averages a step with no negative examples (step 2) against
@@ -599,8 +608,10 @@ whole result:
 | **step 3 — the wrench** | a large steel tool that never enters frame | **3 of 3** ✅ |
 | **step 1 — the o-ring** | a ~10 mm black ring, absent from a hand movement | **0 of 6** ❌ |
 
-**Every single clip where the o-ring was skipped went undetected** — three as false
-PASSES, two as empty results, one as an infrastructure error. Not one was caught.
+**Every single clip where the o-ring was skipped went undetected** — four as false
+PASSES and two as empty results. Not one was caught. (The sixth took four attempts
+to run at all: a missing video object, a missing SOP object, then the token ceiling
+twice. None of those were properties of the clip.)
 
 #### It does not hedge on the o-ring — it confabulates the action
 
@@ -613,6 +624,8 @@ The three false passes describe, in detail, an installation that never happened:
                                               O-ring, and placing it onto the cap groove."
 1_fail_2_pass_3_pass_E   PASSED [3.0-14.0s]  "…picking up the blue cap and installing the rubber
                                               O-ring onto it."
+1_fail_2_pass_3_pass_F   PASSED [2.6-4.4s]   "…picking up the blue cap and installing the O-ring
+                                              onto it."
 ```
 
 "Stretching the O-ring" is a specific, plausible, entirely invented observation.
@@ -743,7 +756,8 @@ clips rather than 6.
 Establishes, on 11 scored clips of one task:
 
 - the mechanics end to end, including the runtime SOP path
-- **an asymmetric, reproducible blind spot** — 0/6 on the small part, 3/3 on the tool
+- **an asymmetric, reproducible blind spot** — 0/6 on the small part, 3/3 on the
+  tool, across four independent takes of the same omission
 - that the `reason` field can be fluent and wrong, so it cannot be used as a
   confidence signal
 - that the reasoning budget fails on the hardest inputs, and drops verdicts it

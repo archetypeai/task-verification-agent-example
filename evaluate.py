@@ -101,7 +101,23 @@ def by_step(rec: dict) -> dict[int, dict]:
     # Only 0 and 1 are credible bases. Anything else means the run reported a
     # subset of steps (e.g. steps 2-3 only), in which case 1-based is right.
     shift = 1 if base == 0 else 0
-    return {int(r["step"]) + shift: r for r in rows if r.get("step") is not None}
+    # DUPLICATE ROWS HAPPEN. One run emitted the same three verdicts three times
+    # over — nine rows for a three-step SOP, byte-identical in blocks. Building a
+    # dict silently keeps the last, which is harmless when the copies agree but
+    # hides the duplication and would quietly pick a winner if they ever disagree.
+    # So collapse explicitly and let the caller see the count.
+    out: dict[int, dict] = {}
+    for r in rows:
+        if r.get("step") is None:
+            continue
+        step = int(r["step"]) + shift
+        if step in out and json.dumps(out[step], sort_keys=True) != \
+                json.dumps(r, sort_keys=True):
+            print(f"  WARNING: step {step} reported twice with DIFFERENT content; "
+                  f"keeping the first")
+            continue
+        out.setdefault(step, r)
+    return out
 
 
 def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
@@ -128,6 +144,10 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
     for clip, rec in sorted(pairs):
         truth = parse_ground_truth(clip)
         rows = by_step(rec)
+        emitted = len(rec.get("results", []) or [])
+        if emitted > len(rows):
+            print(f"  note: {clip} emitted {emitted} rows for {len(rows)} distinct "
+                  f"step(s) — duplicates collapsed")
         cells = []
         for step in range(1, n_steps + 1):
             if step not in truth:
