@@ -425,29 +425,30 @@ instructs the model in the same scheme:
 > *"where N is the step's number written as a plain integer **starting at 0** (the
 > first step is `step 0:`, the second is `step 1:`…)"*
 
-**Be careful how far to take this.** The doc specifies the *wrapper* — `[index]`
-plus `Steps: {…}` — and says not to modify it. It says **nothing about what each
-step string should contain**, and contains no example SOP at all. So "steps should
-arrive as bare text" is an **inference**, not a documented rule: since `[index]` is
-supplied for you, adding a one-based `Step N:` puts two disagreeing numbers in one
-line. That is the reasoning; there is no run here proving it matters.
+The doc also shows a worked **example** of the assembled instruction, and it settles
+what a step string should contain — bare text, with the indices supplied:
 
-With that caveat, the SOP shipped here gives three numbering schemes at once:
+```
+Instruction
+Steps:
 
-| source | numbering |
-|---|---|
-| `PrepareSOPNode` (automatic) | `[0]` `[1]` `[2]` |
-| system message (instructed) | `step 0:` `step 1:` `step 2:` |
-| **`sop/oring.txt` (ours)** | **`Step 1:` `Step 2:` `Step 3:`** |
+[0] Unbox the Sactional side and seat pieces.
+[1] Attach the hardware and feet to the seat base.
+[2] Connect the new Sactional pieces to each other and the existing couch using clamps.
+[3] Place the seat and back cushions onto the assembled frame.
+```
 
-The model therefore receives `[0] Step 1: Install the rubber O-ring…` —
-double-numbered, with the two numbers disagreeing.
-[`sop/oring-plain.txt`](sop/oring-plain.txt) is the same procedure without the
-prefixes, which is what the golden reference's `[index]` wrapping *implies* a step
-string should look like. **Untested**: the prefixes were added before the golden
-reference was known, all 12-clip results used them, and no run has compared the
-two. The cheapest test is one single-omission clip with `--sop sop/oring-plain.txt`
-to see whether the false PASS survives.
+So `Steps:` and `[0] [1] [2]` are what `PrepareSOPNode` **builds**; they do not belong
+in your file. [`sop/oring.txt`](sop/oring.txt) is therefore three bare lines, and the
+pipeline turns them into exactly the shape above.
+
+**An earlier version of this README claimed the doc contained no example SOP and
+treated the plain format as an inference.** That was wrong — the example is in a
+figure. The format is documented, and the default now follows it.
+[`sop/oring-numbered.txt`](sop/oring-numbered.txt) preserves the `Step N:` variant
+because **every committed result was produced with it**, before the example was
+found. Its prefixes double up on the automatic index (`[0] Step 1: …`) with
+disagreeing numbers; whether that cost anything is still untested.
 
 ### What the system message already demands
 
@@ -1213,7 +1214,9 @@ Observations for the author, not defects.
 | Path | What it is |
 |---|---|
 | `run_tva_example.py` | **Start here.** Single-clip end-to-end run: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--repro-empty` reproduces the empty-output failure and reports each symptom as CONFIRMED / NOT REPRODUCED. `--dry-run`, `--show` and `--repro-empty --offline` need no key. |
-| `sop/oring.txt` | The SOP, one step per line. Edit this to change the procedure — no Python involved. |
+| `sop/oring.txt` | The SOP, one bare step per line, matching the doc's example instruction. Edit this to change the procedure — no Python involved. |
+| `sop/oring-numbered.txt` | The `Step N:` variant that produced every committed result, kept for provenance. Its prefixes duplicate the automatic `[index]`. |
+| `sop/oring-strict.txt` | A stricter variant that returns ZERO rows — kept as the worked example of an SOP competing with the system message. |
 | `sweep.py` | Batch path over many clips, reusing one bundle. Sequential by default so a misconfiguration costs one run, not twelve; `--submit-all` instead claims every queue slot up front. `--collect` harvests finished runs after a disconnect and `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
 | `tva_api.py` | Shared stdlib client (streaming upload, retries, `/logs` polling, wired-value preflight). |
