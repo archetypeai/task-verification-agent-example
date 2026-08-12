@@ -69,8 +69,13 @@ def clip_name(path: str, rec: dict) -> str:
     return os.path.basename(path)
 
 
-def load(paths: list[str]) -> list[tuple[str, dict]]:
-    """Read every JSONL record from every path, as (clip, record) pairs."""
+def load(paths: list[str]) -> list[tuple[str, dict, str]]:
+    """Read every JSONL record from every path, as (clip, record, source) triples.
+
+    `source` is the file it came from, needed because the same clip can legitimately
+    appear more than once — one output per SOP format, say — and the clip name alone
+    would neither disambiguate the display nor give a stable sort.
+    """
     out = []
     for path in paths:
         raw = open(path, "rb").read().decode(errors="replace")
@@ -82,7 +87,7 @@ def load(paths: list[str]) -> list[tuple[str, dict]]:
                   f" — the run completed and produced no verification report")
             continue
         for rec in records:
-            out.append((clip_name(path, rec), rec))
+            out.append((clip_name(path, rec), rec, os.path.basename(path)))
     return out
 
 
@@ -141,9 +146,14 @@ def by_step(rec: dict) -> dict[int, dict]:
     return out
 
 
-def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
-    n_steps = max((max(parse_ground_truth(c) or {0: 0}) for c, _ in pairs),
+def score(pairs: list[tuple[str, dict, str]], verbose: bool = False) -> None:
+    n_steps = max((max(parse_ground_truth(c) or {0: 0}) for c, _, _ in pairs),
                   default=0)
+    # Label rows by source file when one clip appears more than once, so two
+    # outputs for the same video are distinguishable in the table.
+    counts: dict[str, int] = {}
+    for c, _, _ in pairs:
+        counts[c] = counts.get(c, 0) + 1
     if not n_steps:
         sys.exit("no ground-truth labels found in any filename or record id")
 
@@ -163,12 +173,13 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
     suspect = []              # PASSED/FAILED with no interval — not real verdicts
     intervals = []
 
-    for clip, rec in sorted(pairs):
+    for clip, rec, source in sorted(pairs, key=lambda t: (t[2], t[0])):
+        label = f"{clip[:26]} [{source[:14]}]" if counts.get(clip, 0) > 1 else clip
         truth = parse_ground_truth(clip)
         rows = by_step(rec)
         emitted = len(rec.get("results", []) or [])
         if emitted > len(rows):
-            print(f"  note: {clip} emitted {emitted} rows for {len(rows)} distinct "
+            print(f"  note: {label} emitted {emitted} rows for {len(rows)} distinct "
                   f"step(s) — duplicates collapsed")
         cells = []
         for step in range(1, n_steps + 1):
@@ -229,7 +240,7 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
 
             cells.append(f"{'PASS' if expected else 'FAIL'}>"
                          f"{status[:7]} {'OK' if ok else '!!'}")
-        print(f"{clip[:42]:<42s}" + "".join(f"  {c:^18s}" for c in cells))
+        print(f"{label[:42]:<42s}" + "".join(f"  {c:^18s}" for c in cells))
 
     print("-" * width)
     if total:
@@ -295,8 +306,8 @@ def score(pairs: list[tuple[str, dict]], verbose: bool = False) -> None:
         print("\n" + "=" * width)
         print("reasons given")
         print("=" * width)
-        for clip, rec in sorted(pairs):
-            print(f"\n{clip}")
+        for clip, rec, source in sorted(pairs, key=lambda t: (t[2], t[0])):
+            print(f"\n{clip}  [{source}]")
             for step, row in sorted(by_step(rec).items()):
                 print(f"  step {step}  {str(row.get('status')):8} "
                       f"{row.get('reason', '')}")

@@ -1021,6 +1021,84 @@ script — reasoning length is not perfectly predictable. Lower `--max-new-token
 and it will, but note that you have then reproduced the fixable failure rather than
 the structural one.
 
+## The SOP format decides whether you get an answer at all
+
+A controlled 2×2: same blueprint, same clips, `max_frames: 64`, `size: 224`, and
+**`max_new_tokens` pinned to 5752** so the SOP format is the only variable. Every
+cell was run 2–5 times and reproduced **byte-identically**.
+
+| | `sop/oring-numbered.txt`<br>(`Step 1:` prefixes) | `sop/oring.txt`<br>(bare, the doc's format) |
+|---|---|---|
+| **`1_pass_2_pass_3_pass_A`**<br>all steps performed | 3 rows · **3/3 correct**<br>md5 `ed8116176e6e` (5×) | 3 rows · **3/3 correct**<br>md5 `c592168b5c58` (2×) |
+| **`1_fail_2_pass_3_fail_A`**<br>steps 1 and 3 skipped | 21 rows · **3/3 correct**<br>md5 `3ef2d7fb07d8` (3×) | **0 rows · no verdicts**<br>md5 `d131e7a67a85` (2×) |
+
+**On the clip that contains defects, the SOP format decides whether there is any
+output.** The two formats differ only in a `Step N:` prefix on each line. The
+prefixed one — which *duplicates* the `[index]` the pipeline adds, and is therefore
+the format the doc implies you should not use — is the one that answers correctly.
+The bare format the doc's example shows returns nothing.
+
+The easy clip cannot see this at all: both formats score 3/3 there. **A smoke test
+on a clean recording would have concluded the formats are equivalent.**
+
+Outputs for all four cells are committed under
+[`reference/grid-5752/`](reference/grid-5752), so the digests are checkable offline:
+
+```sh
+python3 evaluate.py reference/grid-5752/*.jsonl
+```
+
+### Reproducing it
+
+```sh
+# easy clip — both SOPs agree: 3 verdicts, 3/3 correct
+python3 run_tva_example.py --video 1_pass_2_pass_3_pass_A --sop sop/oring-numbered.txt \
+    --max-new-tokens 5752 --output grid-easy-numbered.jsonl
+python3 run_tva_example.py --video 1_pass_2_pass_3_pass_A --sop sop/oring.txt \
+    --max-new-tokens 5752 --output grid-easy-plain.jsonl
+
+# defect-bearing clip — the SOPs disagree completely
+python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A --sop sop/oring-numbered.txt \
+    --max-new-tokens 5752 --output grid-hard-numbered.jsonl   # 21 rows, 3/3 correct
+python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A --sop sop/oring.txt \
+    --max-new-tokens 5752 --output grid-hard-plain.jsonl      # 0 rows
+```
+
+**Pin `--max-new-tokens`.** Left unset, the budget is computed from the SOP's length,
+so the shorter bare SOP would get 5758 and the prefixed one 5752 — the format would
+no longer be the only variable. (Those 6 tokens are provably immaterial: 5752 and
+5758 produce byte-identical output on the easy clip. Pinning removes the question.)
+
+**Pass `--output`.** Two of these four share a clip, and the default output name is
+derived from the clip — so without it the second run silently overwrites the first.
+
+**Run them one at a time, or check for the skip message.** All four inputs must
+already be on the platform with identical bytes, or a re-upload will destroy a
+queued run's input — see
+[the upload note](#platform-behavior-worth-knowing). Each run should print
+`identical object already on the platform — skipping upload` twice; if one says
+`uploading`, let it finish before starting the next.
+
+### What this does not explain
+
+Two things are established here and one is not:
+
+- **Established:** which configurations produce output, reproducibly.
+- **Established:** why 21 rows rather than 3 — the model emits the verdict block
+  seven times (one placeholder block with `reason: "..."`, then the real answer six
+  times, identical), and the parser regex-matches every occurrence without ever
+  comparing the count to the SOP's step count.
+- **NOT established: why the model repeats, or why the bare SOP yields nothing.**
+  The 21-row output used ~918 of 5752 tokens — about 15% — and then stopped on its
+  own, so it is not a runaway that exhausted the budget. And the empty run logged
+  no WARN at all, so it is not the reasoning-block overflow either; the parser
+  simply matched nothing in whatever was generated.
+
+Neither question is answerable through this API: **the raw generation is never
+exposed**, and `temperature`, `repetition_penalty` and `stop` are not wired on this
+blueprint. `parser_compute_stats: true` would at least report template conformance
+on the empty case, and is the next diagnostic worth running.
+
 ## Platform behavior worth knowing
 
 - **The `/agents` API is dev-only.** Prod 404s on every `/agents` path; a prod key
@@ -1224,7 +1302,8 @@ Observations for the author, not defects.
 | `sweep.py` | Batch path over many clips, reusing one bundle. Sequential by default so a misconfiguration costs one run, not twelve; `--submit-all` instead claims every queue slot up front. `--collect` harvests finished runs after a disconnect and `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
 | `tva_api.py` | Shared stdlib client (streaming upload, retries, `/logs` polling, wired-value preflight). |
-| `reference/` | Committed run outputs and a blueprint snapshot, so every number here is checkable offline with no API key. Includes the 44-byte empty result from the `max_new_tokens: 2048` overflow, kept as evidence because it is the failure worth recognising. |
+| `reference/` | Committed run outputs, the extracted design-doc figures, and a blueprint snapshot, so every number here is checkable offline with no API key. Includes the 44-byte empty results, kept as evidence because they are the failure worth recognising. |
+| `reference/grid-5752/` | The four outputs of the SOP-format 2×2, at a pinned budget. `python3 evaluate.py reference/grid-5752/*.jsonl` reproduces the table above. |
 | `docs/` | The TVA design doc this example implements (gitignored — internal). |
 
 ## Not yet built
