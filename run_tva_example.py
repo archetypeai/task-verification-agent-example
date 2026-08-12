@@ -289,7 +289,15 @@ def main() -> None:
                          "frame every 1.9 s. 64 is also the reader and "
                          "preprocessor batch size, so they land in one batch. "
                          "(default: 64)")
-    ap.add_argument("--max-new-tokens", type=int, default=5120,
+    ap.add_argument("--size", type=int, default=224,
+                    help="each frame is resized to size x size (blueprint default "
+                         "224). Raising it recovers spatial detail — a ~10 mm "
+                         "o-ring is a handful of pixels at 224 — but visual tokens "
+                         "grow as (size/32)^2 PER temporal step and share the 8192 "
+                         "context, so more size forces fewer frames. Source "
+                         "resolution (null) is unreachable: 1080p costs ~3600 "
+                         "tokens per step.")
+    ap.add_argument("--max-new-tokens", type=int, default=None,
                     help="output budget, capped by max_seq_len. MUST BE STRICTLY "
                          "BELOW max_seq_len, which is 8192 in this deployment and "
                          "is NOT exposed — 8192 is rejected at graph "
@@ -324,7 +332,15 @@ def main() -> None:
 
     clip = os.path.splitext(os.path.basename(args.video))[0]
     out_path = args.output or f"tva-output-{clip}.jsonl"
-    values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens}
+    # Default to the MAXIMUM the context window allows, computed from the actual
+    # frames/size — not a guessed constant. See api.max_usable_new_tokens().
+    if args.max_new_tokens is None:
+        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size)
+        print(f"max_new_tokens not set -> using {args.max_new_tokens}, the most "
+              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size)}-token "
+              f"prompt in max_seq_len={api.MAX_SEQ_LEN}")
+    values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
+              "size": args.size}
 
     if args.dry_run:
         endpoint = api.api_base()
@@ -364,7 +380,7 @@ def main() -> None:
               f"silently ignored.")
     # The expensive one: a sink the platform cannot instantiate wastes the whole
     # cold start before failing. Catch it here, for free.
-    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens)
+    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size)
     if budget_warning:
         print(f"  ** {budget_warning}")
         if not args.force:

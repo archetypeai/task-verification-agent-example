@@ -322,6 +322,24 @@ def estimate_prompt_tokens(max_frames: int, size: int = 224) -> int:
     return steps * per_step + TEXT_TOKEN_OVERHEAD
 
 
+def max_usable_new_tokens(max_frames: int, size: int = 224,
+                          margin: int = 64) -> int:
+    """The largest `max_new_tokens` that fits alongside the prompt.
+
+    Worth computing rather than guessing. The nine runs that produced verdicts in
+    this example asked for 8192 — more than the window — and the engine gave them
+    whatever remained after the prompt: 8192 - 2368 = 5824 tokens. A later
+    "safe-looking" default of 5120 therefore gave the model LESS reasoning room
+    than the runs that worked, for no reason. Leaving headroom unused is a real
+    cost here, because reasoning length is what fails first on the hardest clips.
+
+    `margin` guards against the prompt estimate being slightly low (a longer SOP,
+    a different system message) — being rejected at fusion time costs the whole
+    cold start, so a few dozen tokens of slack is cheap insurance.
+    """
+    return max(256, MAX_SEQ_LEN - estimate_prompt_tokens(max_frames, size) - margin)
+
+
 def check_token_budget(max_frames: int, max_new_tokens: int,
                        size: int = 224) -> str | None:
     """Return a message if prompt + generation cannot fit in the context window.

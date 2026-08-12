@@ -792,6 +792,46 @@ instantiation on the `must be below max_seq_len` check, on the same pinned
 blueprint. The node schema changed underneath, not the blueprint. The scripts
 default to **8191**.
 
+#### Neither lever works, because they all draw on the same 8192 tokens
+
+Two mitigations were tried on a clip that had produced a false `PASSED`. **Both
+returned zero rows**, and neither carried the reasoning-block WARN — the parser
+simply matched nothing, silently, after ~1000 s of GPU each:
+
+| attempt | changed | result |
+|---|---|---|
+| stricter SOP | added per-step evidence requirements | **0 rows**, no WARN |
+| higher resolution | `size` 224 → 448, frames 64 → 32 | **0 rows**, no WARN |
+
+The arithmetic explains why this was close to unavoidable:
+
+| run | size | frames | asked | prompt | generation actually available |
+|---|---|---|---|---|---|
+| the 9 that produced verdicts | 224 | 64 | 8192 | 2,368 | **5,824** |
+| stricter SOP | 224 | 64 | 5120 | 2,462 | 5,120 |
+| higher resolution | 448 | 32 | 4096 | 3,936 | 4,096 |
+
+**The nine successful runs asked for more than the window and got everything left
+over — 5,824 tokens.** Every mitigation reduces that number: a longer SOP adds
+prompt tokens, and raising `size` adds them quadratically. So the two things you
+would naturally try to fix the blind spot both **starve the reasoning that produces
+the verdicts at all.**
+
+Note this is not deterministic — one clip did return verdicts at 5,120 — so budget
+alone does not predict failure; clip difficulty interacts with it. But the
+direction is clear, and it means **`size` cannot currently be evaluated as a fix**:
+at `size: 448` the ceiling leaves 4,192 generation tokens, well under what the
+working runs used.
+
+**Do not guess a budget.** An earlier version of these scripts defaulted to a
+"safe-looking" 5120, which gave the model *less* room than the runs that worked, for
+no reason. `tva_api.max_usable_new_tokens()` now computes it from the actual frames
+and size — 5,760 at the defaults — and the runners print what they chose.
+
+The real fix is not caller-side. **Raise `max_seq_len`.** At 8192, spatial detail,
+temporal resolution and reasoning length are in a three-way fight over one budget,
+and a ~10 mm o-ring loses.
+
 #### One infrastructure failure, reported as a completed job
 
 `1_fail_2_pass_3_pass_F` never ran:

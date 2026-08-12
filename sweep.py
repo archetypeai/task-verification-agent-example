@@ -218,7 +218,15 @@ def main() -> None:
                          f"The key 'tva' currently resolves to a blueprint whose "
                          f"sink cannot be instantiated — see the README.")
     ap.add_argument("--max-frames", type=int, default=64)
-    ap.add_argument("--max-new-tokens", type=int, default=5120,
+    ap.add_argument("--size", type=int, default=224,
+                    help="each frame is resized to size x size (blueprint default "
+                         "224). Raising it recovers spatial detail — a ~10 mm "
+                         "o-ring is a handful of pixels at 224 — but visual tokens "
+                         "grow as (size/32)^2 PER temporal step and share the 8192 "
+                         "context, so more size forces fewer frames. Source "
+                         "resolution (null) is unreachable: 1080p costs ~3600 "
+                         "tokens per step.")
+    ap.add_argument("--max-new-tokens", type=int, default=None,
                     help="output budget (default 8192). At 2048 a clip with a "
                          "skipped step exhausted the budget inside the model's "
                          "<think> block and returned results:[] — see the README.")
@@ -298,7 +306,15 @@ def main() -> None:
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
-    values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens}
+    # Default to the MAXIMUM the context window allows, computed from the actual
+    # frames/size — not a guessed constant. See api.max_usable_new_tokens().
+    if args.max_new_tokens is None:
+        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size)
+        print(f"max_new_tokens not set -> using {args.max_new_tokens}, the most "
+              f"that fits beside a ~{api.estimate_prompt_tokens(args.max_frames, args.size)}-token "
+              f"prompt in max_seq_len={api.MAX_SEQ_LEN}")
+    values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
+              "size": args.size}
 
     if args.dry_run:
         # Resuming matters here: a sweep is hours long and gets interrupted, so
@@ -330,7 +346,7 @@ def main() -> None:
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
     if inert:
         print(f"  WARNING: {inert} is not wired and will be silently ignored.")
-    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens)
+    budget_warning = api.check_token_budget(args.max_frames, args.max_new_tokens, args.size)
     if budget_warning:
         sys.exit(f"REFUSING TO RUN: {budget_warning}")
     sink_warning = api.check_sink(bp["document"])
