@@ -1,0 +1,12 @@
+# Three steps, as every SOP here has. Steps 1 and 2 are the real procedure.
+# Step 3 replaces the wrench step with an action that CANNOT HAVE HAPPENED: there
+# is no sealant tube anywhere in the rig, in any of the twelve clips.
+#
+# This tests the span-matching hypothesis (see README) without changing the step
+# count. On a clip with three activity spans, if verdicts come from matching steps
+# to spans in order, step 3 finds the wrench span and is marked PASSED — meaning
+# the model reports sealant being applied that does not exist and was never filmed.
+# A model actually evaluating the description against the frames must say MISSING.
+Step 1: The worker picks up the small black rubber O-ring as a separate loose part and attaches, places, or aligns it onto the blue cap.
+Step 2: The worker attaches, inserts, or aligns the blue cap into a port of the black manifold by hand.
+Step 3: The worker squeezes thread sealant from a tube onto the manifold port.

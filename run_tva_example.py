@@ -10,16 +10,18 @@ virtualenv, no GPU, no atai_core checkout.
     python3 run_tva_example.py                      # the default clip
     python3 run_tva_example.py --video data/clips/1_pass_2_pass_3_fail_A.mp4
     python3 run_tva_example.py --dry-run            # print the payloads, call nothing
-    python3 run_tva_example.py --show out.jsonl     # re-read an output, no API calls
+    python3 run_tva_example.py --show out.json     # re-read an output, no API calls
 
     # reproduce the empty-output failure — the one worth recognising
     python3 run_tva_example.py --repro-empty --offline   # free, no API key
     python3 run_tva_example.py --repro-empty             # live, ~13 min
 
-Expect ~13 minutes (754-814 s observed): ~7 min of model download and load on
-EVERY run — nothing is cached between runs — then ~5 min of generation for a 30 s
-clip. Dev has one GPU and serializes these, so a concurrent run queues behind
-yours; 796 s of queue wait has been observed.
+Budget 20-30 MINUTES, not the ~13 of job time. The job itself is 754-1614 s once it
+starts — ~7 min of model download and load on EVERY run, nothing cached between
+runs, then generation — and THE QUEUE IS ON TOP OF THAT. Dev has one GPU shared
+across orgs; waits from 12 s to 796 s have been observed, and one 17-minute job took
+41 minutes of wall clock. Ten silent minutes means queued, not hung: look for
+`job.admitted` in the /logs stream this script prints.
 
 WHAT IS DIFFERENT FROM THE MGA EXAMPLE, and it is the whole point:
 
@@ -117,7 +119,20 @@ BLUEPRINT_HISTORIC_WORKING = "blp_6dp7cye17f8qct7a9jbzx6yhfy"   # what reference
 # The wording stays behavioural ("ensuring it is properly seated") and does not
 # name a torque figure, because nothing in a 30-second handheld video can
 # evidence a number — see the README on why step 3 is the one that misreads.
-DEFAULT_SOP_PATH = "sop/oring.txt"
+# THE BASELINE, as of 2026-08-13: sop/oring-numbered.txt.
+#
+# Not sop/oring.txt (the design doc's bare format), even though that is the format
+# the doc shows. Every committed result in this repo was produced with the numbered
+# SOP — reference/sweep/ (12 clips), eval_paired/ (12 clips, stem-matched), and the
+# replication grid — so making it the default is what keeps a fresh `python3
+# run_tva_example.py` comparable to the numbers in the README instead of silently
+# testing a different prompt.
+#
+# The two formats were compared directly and the difference did not survive
+# scrutiny: eight SOP variants across five mechanisms produced identical verdicts on
+# the two hardest clips. sop/oring.txt is kept for the format comparison, not
+# because either format is better.
+DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
 
 
 def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
@@ -168,7 +183,7 @@ REPRO = {
 }
 # What that clip produced in the sweep, committed so the failure is inspectable
 # offline with no API key.
-REPRO_REFERENCE = "reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl"
+REPRO_REFERENCE = "reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json"
 REPRO_EXPECTED_MD5 = "1b56135df5d1476c625e6aedfd18b91b"
 
 # The avoidable variant, kept only so the contrast is available:
@@ -237,6 +252,23 @@ def sop_upload_name(sop_path: str = DEFAULT_SOP_PATH) -> str:
     changes the output digest anyway.
     """
     return os.path.basename(sop_path)
+
+
+def pair_names(clip: str, sop_path: str, pair_sop: bool,
+               video_name: str | None = None) -> tuple[str, str]:
+    """The file ids the video and SOP are uploaded under: (video, sop).
+
+    ONE definition, used by both --dry-run and the real upload. They were computed
+    separately once and immediately diverged — --dry-run kept printing the previous
+    naming scheme after the default changed, which is the worst possible bug in a
+    flag whose entire job is to tell you what a run would do.
+    """
+    if pair_sop:
+        # Clip stem only: the platform team's literal recommendation.
+        return (video_name or f"{clip}.mp4"), f"{clip}.txt"
+    # Default: stems match AND record which SOP produced the run.
+    stem = f"{clip}-{os.path.splitext(os.path.basename(sop_path))[0]}"
+    return f"{stem}.mp4", f"{stem}.txt"
 
 
 def parse_ground_truth(filename: str) -> dict[int, bool]:
@@ -446,23 +478,25 @@ def main() -> None:
                          "resolution (null) is unreachable: 1080p costs ~3600 "
                          "tokens per step.")
     ap.add_argument("--max-new-tokens", type=int, default=None,
-                    help="output budget, capped by max_seq_len. MUST BE STRICTLY "
-                         "BELOW max_seq_len, which is 8192 in this deployment and "
-                         "is NOT exposed — 8192 is rejected at graph "
-                         "instantiation. The prompt (video frames + SOP) and the "
-                         "generated tokens SHARE that 8192, so at max_frames=64 "
-                         "only ~6400 remain for the model's <think> block plus the "
-                         "verdicts. Raising this cannot buy more than the ceiling "
-                         "allows. (default: 8191, the maximum accepted)")
+                    help="output budget. The prompt (video frames + SOP) and the "
+                         "generated tokens SHARE the context window, so this is "
+                         "capped by max_seq_len — which is NOT exposed by the API "
+                         "and has been raised twice during this work (8192, then "
+                         ">9304, then >10568). BIGGER IS NOT BETTER: the failure "
+                         "mode is repetition, and on the double-omission clip 8192 "
+                         "returned 0 rows where 5760 returned correct verdicts. "
+                         f"(default: {api.DEFAULT_MAX_NEW_TOKENS}, or the window's "
+                         "ceiling if that is lower)")
     ap.add_argument("--pair-sop", action="store_true",
-                    help="upload the SOP as <video-stem>.txt so the video and text "
-                         "share a stem. Reported as how the pipeline pairs a video "
-                         "with its SOP: inputs arrive as one flat list of file ids, "
-                         "so a pack of N videos and N texts is matched by name. "
-                         "UNVERIFIED here — a 1:1 run works either way (our runs "
-                         "used mismatched stems and the verdicts plainly reflect "
-                         "the SOP), so compare digests to see whether the name "
-                         "changes anything.")
+                    help="upload the SOP as <video-stem>.txt — the CLIP's stem only, "
+                         "which is the platform team's literal recommendation. Not "
+                         "the default, because one name per clip means every SOP "
+                         "variant overwrites the last and a run in flight can be "
+                         "changed under it. The default already matches stems AND "
+                         "names the SOP (<clip>-<sop>.txt), so use this flag only to "
+                         "reproduce the plain convention. Either way a 1:1 run works: "
+                         "the unpaired 12-clip sweep in reference/sweep/ returned "
+                         "verdicts for 10 of 12 clips with mismatched stems.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"text file of SOP steps, one per line "
                          f"(default: {DEFAULT_SOP_PATH}). The SOP is the ONLY "
@@ -470,8 +504,9 @@ def main() -> None:
                          f"`prompt` value — so this file is the whole lever.")
     ap.add_argument("--name", default="TVA o-ring cap assembly")
     ap.add_argument("--output", default=None,
-                    help="where to save the JSONL (default: tva-output-<clip>.jsonl)")
-    ap.add_argument("--show", metavar="JSONL",
+                    help="where to save the result (default: tva-output-<clip>.json). "
+                         "The tva sink is json/per-request, so the payload is JSON.")
+    ap.add_argument("--show", metavar="FILE",
                     help="pretty-print an output file and stop — no API calls")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the exact payloads and stop — no API calls")
@@ -535,16 +570,16 @@ def main() -> None:
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
     clip = os.path.splitext(os.path.basename(args.video))[0]
-    out_path = args.output or f"tva-output-{clip}.jsonl"
-    # Default to the MAXIMUM the context window allows, computed from the actual
-    # frames/size — not a guessed constant. See api.max_usable_new_tokens().
+    out_path = args.output or f"tva-output-{clip}.json"
+    # Default to a budget that has actually PRODUCED ANSWERS, not to the ceiling.
+    # See api.DEFAULT_MAX_NEW_TOKENS for why the ceiling is the wrong default.
     if args.max_new_tokens is None:
-        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
-        print(f"max_new_tokens not set -> using {args.max_new_tokens}: "
-              f"{api.MAX_SEQ_LEN_KNOWN_GOOD} (largest total OBSERVED to work) "
-              f"- ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)} prompt - 64 margin.\n"
-              f"  The served max_seq_len is not exposed and was raised at least once, "
-              f"so a larger value may well work — pass --max-new-tokens to try.")
+        ceiling = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
+        args.max_new_tokens = min(api.DEFAULT_MAX_NEW_TOKENS, ceiling)
+        print(f"max_new_tokens not set -> using {args.max_new_tokens} "
+              f"(the ceiling here is {ceiling}; a bigger budget is more room to "
+              f"LOOP, not to reason — see api.DEFAULT_MAX_NEW_TOKENS).\n"
+              f"  Pass --max-new-tokens {ceiling} to use the whole window instead.")
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
               "size": args.size}
 
@@ -554,10 +589,12 @@ def main() -> None:
         print(json.dumps({"blueprint": args.blueprint, "name": args.name,
                           "values": values}, indent=2))
         print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
+        v_name, s_name = pair_names(clip, args.sop, args.pair_sop,
+                                    os.path.basename(args.video)
+                                    if os.path.splitext(args.video)[1] else None)
         print(json.dumps({"connectors": {"source": [
-            {"type": "file", "id": os.path.basename(args.video), "format": "mp4"},
-            {"type": "file", "id": (f"{clip}.txt" if args.pair_sop
-                                    else sop_upload_name(args.sop)), "format": "txt"},
+            {"type": "file", "id": v_name, "format": "mp4"},
+            {"type": "file", "id": s_name, "format": "txt"},
         ]}}, indent=2))
         print(f"\nthe SOP that would be uploaded ({len(steps)} steps, "
               f"one per line):\n")
@@ -608,20 +645,31 @@ def main() -> None:
 
     print(f"\nuploading {args.video} "
           f"({os.path.getsize(args.video) / 1e6:.1f} MB) ...")
-    video_id = api.upload_file(args.video)
+    v_name, s_name = pair_names(clip, args.sop, args.pair_sop,
+                                os.path.basename(args.video))
     if args.pair_sop:
-        # Uploaded under the VIDEO's stem, because the pipeline receives inputs as one
-        # flat list of file ids and pairs a video with its SOP by matching stems. A
-        # per-clip name also means concurrent runs on different clips cannot clobber
-        # each other's SOP, which one shared name does allow.
+        # The platform team's literal recommendation: name the SOP after the CLIP.
+        # Kept so that exact convention can still be reproduced, but not the default:
+        # one name per clip means every SOP variant overwrites the last, and content
+        # is resolved at RUN time, so a second run can change a first run's SOP
+        # mid-flight. That cost two attributable results here — 7 hours after a
+        # 12-clip sweep, the platform could no longer say what two of those runs had
+        # been given (see the README).
+        video_id = api.upload_file(args.video)
         paired = os.path.join("sop", "paired", f"{clip}.txt")
         if os.path.exists(paired) and open(paired).read() == sop_text(steps):
             sop_id = api.upload_file(paired)          # ship the committed file itself
         else:
-            sop_id = api.upload_text(sop_text(steps), f"{clip}.txt")
+            sop_id = api.upload_text(sop_text(steps), s_name)
     else:
-        sop_id = upload_sop(args.sop, steps)
+        # DEFAULT: the stems match each other AND record which SOP produced the run.
+        # The cost is one video copy per SOP variant; upload_file() is idempotent on
+        # name+bytes, so it is paid once per variant, not per run.
+        video_id = api.upload_file(args.video, rename=v_name)
+        sop_id = api.upload_text(sop_text(steps), s_name)
     print(f"  video file_id={video_id}\n  sop   file_id={sop_id}")
+    if video_id.rsplit(".", 1)[0] == sop_id.rsplit(".", 1)[0]:
+        print(f"  stems match — nothing else writes to this pair")
 
     # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and
     # whisper:large-v3 itself, same as mga and unlike red/osm.

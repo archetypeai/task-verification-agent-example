@@ -366,8 +366,45 @@ def check_sink(doc: dict) -> str | None:
 # runs. Treated as a floor rather than a limit: the preflight now warns instead of
 # refusing, because a stale constant that blocks good work is worse than one that
 # lets a bad run through.
-MAX_SEQ_LEN_KNOWN_GOOD = 9304        # observed to work
+#
+# Raised again on 2026-08-12: the paired 12-clip sweep ran max_frames=64 with
+# sop/oring-numbered.txt (prompt ~2376) and max_new_tokens=8192 — total 10568 — and
+# 8 of the 12 runs completed and returned parsed verdicts. The 4 that produced no
+# verdicts failed inside the model's reasoning block, NOT at fusion, so they are
+# not evidence against the window either.
+#
+# Raised again, and by a lot, on 2026-08-13. The BLUEPRINT'S OWN DEFAULT for
+# max_new_tokens is 16384 — printed in every run's preflight as "blueprint default:
+# 16384" — which was a standing hint that the window is far larger than our
+# bracketing suggested. A run at max_frames=64 with max_new_tokens=16384 (prompt
+# ~2370, total ~18754) cleared graph instantiation AND fusion, and generated until
+# it exhausted the budget. So the window is >= 18754, and the earlier 8192/9304/
+# 10568 values were all just the largest we had happened to try.
+#
+# Note what this does NOT mean: a bigger window is not a bigger answer. That same
+# run returned results:[] at 16384 exactly as it had at 8192. See
+# DEFAULT_MAX_NEW_TOKENS.
+MAX_SEQ_LEN_KNOWN_GOOD = 18754       # observed to work (oring-question @ 64 frames, 16384)
 MAX_SEQ_LEN = 262144                 # the schema ceiling; the real limit is unknown
+
+# The DEFAULT output budget — deliberately NOT the ceiling.
+#
+# max_usable_new_tokens() returns the largest budget the window allows, and using
+# that as the default was wrong twice over:
+#
+#   * The pathology here is REPETITION. The model emits the verdict block over and
+#     over, so a bigger budget is more room to loop, not more room to reason.
+#     Measured on 1_fail_2_pass_3_fail_A, one clip, two budgets:
+#         8192 -> looped inside <think>, never closed  -> 0 rows
+#         5760 -> closed <think>, looped in the answer -> 21 rows, verdicts CORRECT
+#   * A COMPUTED default drifts. Raising MAX_SEQ_LEN_KNOWN_GOOD from 9304 to 10568
+#     silently moved the default from 6864 to 8128 — into the region that returns
+#     nothing — as a side effect of recording an unrelated fact about the window.
+#     A fixed number cannot do that.
+#
+# Every answer we have on a defect-bearing clip came from 5120-5760. Callers who
+# want the ceiling can still ask for it explicitly.
+DEFAULT_MAX_NEW_TOKENS = 5760
 
 # Vision token arithmetic for the preprocessor defaults (patch 16, merge 2,
 # temporal patch 2, size 224): each temporal step is (224/16/2)^2 = 49 tokens, and
@@ -397,7 +434,13 @@ def estimate_sop_tokens(sop_text_or_path: str | None) -> int:
     text = sop_text_or_path
     if os.path.exists(sop_text_or_path):
         with open(sop_text_or_path) as fh:
-            text = fh.read()
+            # Count only what is actually UPLOADED. load_sop() drops blank lines and
+            # # comments, so counting the raw file charges the prompt for commentary
+            # the model never sees — sop/oring-sealant.txt has a 9-line rationale
+            # block that inflated the estimate by ~125 tokens and made the budget
+            # warning fire on a run that was nowhere near the ceiling.
+            text = "".join(l for l in fh
+                           if l.strip() and not l.lstrip().startswith("#"))
     # Round up: an underestimate is rejected at fusion time after the cold start,
     # while an overestimate merely leaves a few generation tokens unused.
     return -(-len(text) // CHARS_PER_TOKEN) + 8

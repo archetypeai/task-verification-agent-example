@@ -1,0 +1,13 @@
+# Same insight as oring-conditional, but WITHOUT status words, so it carries none of
+# the 0-row risk that instructing PASSED/MISSING may have caused in oring-strict.
+#
+# An interrogative asserts nothing — there is no claim for the model to restate as an
+# observation — while leaving the verdict vocabulary entirely to the system message,
+# which already specifies PASSED/FAILED/MISSING and how to choose between them.
+#
+# If this detects the omission and the five declarative variants did not, the finding
+# is that SOP steps must be written as questions rather than as statements, which is
+# a concrete and cheap thing to tell a customer.
+Step 1: Does the worker attach, place, or align the black O-ring onto the blue cap?
+Step 2: Does the worker attach, insert, or align the blue cap into a port of the black manifold by hand?
+Step 3: Does the worker use a wrench to tighten the blue cap?

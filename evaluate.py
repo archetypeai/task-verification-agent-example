@@ -5,9 +5,9 @@ Offline and stdlib-only: no API key, no network, no GPU. A run happens once and
 costs ~9 minutes of a shared GPU, but you will read its numbers many times, so
 scoring is a separate free step that reads committed files.
 
-    python3 evaluate.py reference/*.jsonl          # score every committed run
-    python3 evaluate.py tva-output-1_pass_2_pass_3_pass_A.jsonl
-    python3 evaluate.py reference/*.jsonl --verbose   # per-step reasons too
+    python3 evaluate.py reference/*.json           # score every committed run
+    python3 evaluate.py tva-output-1_pass_2_pass_3_pass_A.json
+    python3 evaluate.py reference/*.json --verbose    # per-step reasons too
 
 GROUND TRUTH comes from the filename: `1_pass_2_pass_3_fail_A.mp4` means step 1
 correct, step 2 correct, step 3 not. The trailing letter is a take id. That makes
@@ -70,7 +70,7 @@ def clip_name(path: str, rec: dict) -> str:
 
 
 def load(paths: list[str]) -> list[tuple[str, dict, str]]:
-    """Read every JSONL record from every path, as (clip, record, source) triples.
+    """Read every record from every path, as (clip, record, source) triples.
 
     `source` is the file it came from, needed because the same clip can legitimately
     appear more than once — one output per SOP format, say — and the clip name alone
@@ -79,7 +79,20 @@ def load(paths: list[str]) -> list[tuple[str, dict, str]]:
     out = []
     for path in paths:
         raw = open(path, "rb").read().decode(errors="replace")
-        records = [json.loads(l) for l in raw.splitlines() if l.strip()]
+        try:
+            records = [json.loads(l) for l in raw.splitlines() if l.strip()]
+        except json.JSONDecodeError as e:
+            print(f"  {os.path.basename(path)}: not a result file, skipping ({e})")
+            continue
+        # A run log is JSON too, and lives in the same directory. Since every output
+        # is now named .json, `<dir>/*.json` matches sweep-log.json as well — which
+        # crashed this script until it learned to recognise a non-result file.
+        # Identify results structurally rather than by filename.
+        records = [r for r in records if isinstance(r, dict) and "results" in r]
+        if not records and raw.strip():
+            print(f"  {os.path.basename(path)}: no verification records "
+                  f"(no 'results' key) — skipping, this is not a run output")
+            continue
         if not records:
             # A run can complete and return nothing. That is a result, not a
             # read error, so surface it rather than skipping the file silently.
@@ -316,7 +329,7 @@ def score(pairs: list[tuple[str, dict, str]], verbose: bool = False) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("outputs", nargs="+", help="JSONL output files (globs fine)")
+    ap.add_argument("outputs", nargs="+", help="result files (globs fine)")
     ap.add_argument("--verbose", action="store_true",
                     help="also print the reason TVA gave for every step")
     args = ap.parse_args()

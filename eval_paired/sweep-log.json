@@ -1,0 +1,74 @@
+[
+  {
+    "clip": "1_fail_2_pass_3_fail_A",
+    "agent_id": "agt_5xea9adx578p4rbygn475qce8x",
+    "verdict": "empty-reasoning-overflow",
+    "steps": 0
+  },
+  {
+    "clip": "1_fail_2_pass_3_pass_A",
+    "agent_id": "agt_7n8zse0wne9he9m9zbjr6zymg3",
+    "verdict": "timeout",
+    "steps": 0
+  },
+  {
+    "clip": "1_fail_2_pass_3_pass_B",
+    "agent_id": "agt_55v94b0ynr8swsm3vedht5wjvt",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_fail_2_pass_3_pass_C",
+    "agent_id": "agt_14g6jt7wp49838q1zrxyj9pkxn",
+    "verdict": "empty-reasoning-overflow",
+    "steps": 0
+  },
+  {
+    "clip": "1_fail_2_pass_3_pass_E",
+    "agent_id": "agt_0w9vmh5d4j8gcvck6a9eahq04t",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_fail_2_pass_3_pass_F",
+    "agent_id": "agt_7vy0g03cgm8b9v9fc9kgc0qasc",
+    "verdict": "empty-reasoning-overflow",
+    "steps": 0
+  },
+  {
+    "clip": "1_pass_2_pass_3_fail_A",
+    "agent_id": "agt_6w6x3jxf9c9hstg1nfk8sxva8z",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_pass_2_pass_3_fail_B",
+    "agent_id": "agt_2w6411mm4593v9p0zka7g1tkmw",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_pass_2_pass_3_fail_C",
+    "agent_id": "agt_3bhs1hdqk283st5b8yvsjp241s",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_pass_2_pass_3_pass_A",
+    "agent_id": "agt_0cahhtsek89yav9a99pmqze24p",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_pass_2_pass_3_pass_B",
+    "agent_id": "agt_349cxpspzx94y92snxzrb5g172",
+    "verdict": "completed",
+    "steps": 3
+  },
+  {
+    "clip": "1_pass_2_pass_3_pass_C",
+    "agent_id": "agt_2w3m5fgzqj9nva72jba435vrap",
+    "verdict": "completed",
+    "steps": 3
+  }
+]

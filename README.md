@@ -50,61 +50,6 @@ accepts a `.txt` and routes it `source.text -> prepare.in` through a dedicated
 every SOP.** That single edge turns "describe this video" into "check this video
 against my procedure", and most of this README is about the consequences.
 
-## The canonical blueprint's sink was broken for ~18 hours — now fixed
-
-**Resolved 2026-08-12 ~16:42 UTC.** Kept because the reproduction commands and the
-`reference/` outputs were all produced during the outage, and because the shape of
-the failure is worth recognising.
-
-`tva` was republished on 2026-08-11 at 22:01 with its sink format changed from
-`jsonl/per-request` to `json/per-request`, for which **no connector was registered**.
-Every run against the canonical blueprint died at graph instantiation:
-
-```
-ERROR  error           instantiating graph: no connector registered for
-                       format="json/per-request" kind="s3"
-ERROR  pod.terminated  Container agent terminated: Error (exit=1)
-```
-
-It persisted across **three consecutive canonical versions**:
-
-| version | published | sink format | tested | result |
-|---|---|---|---|---|
-| `blp_6dp7cye…` | Aug 11 18:27 | `jsonl/per-request` | ✅ 38 runs | works — `reference/` used this |
-| `blp_7xfkarv…` | Aug 11 22:01 | `json/per-request` | ✅ 3 runs | exit 1, no output |
-| `blp_0tv0wxetd…` | Aug 12 00:46 | `json/per-request` | ❌ never run | assumed broken |
-| `blp_6yvpfy3mb…` | Aug 12 12:39 | `json/per-request` | ✅ | **works — the fix** |
-
-Three things worth taking from it:
-
-- **The graph is validated AFTER both models load.** A blueprint that cannot
-  instantiate still costs the full ~7-minute cold start — 996 s observed for zero
-  output — and a sweep repeats that once per clip. Validating connectors up front
-  would turn it into about a second.
-- **Nothing upstream hints at it.** The bundle returns `status: ready`, the run
-  returns `202`, and the failure appears only in `/logs` with `/results` empty.
-- **An assumption is not a measurement, and mine went stale.** This document
-  asserted three broken versions on evidence from one, for eighteen hours, and
-  `check_sink()` refused to run the canonical blueprint on that basis. It took one
-  deliberate `--force` run to find the fix. **If a preflight encodes a denylist,
-  re-test it before trusting it** — which is why the check now reads the blueprint
-  document and treats both formats as good, so it keeps working as a regression test
-  without pre-judging.
-
-### The two sink formats differ in packaging, not content
-
-The fix also revealed what the names mean, which the blueprint never says:
-
-| format | writes |
-|---|---|
-| `jsonl/per-request` | **one** `.jsonl` file, one line per request |
-| `json/per-request` | **one numbered `.json` file per request** — `…__output_<clip>_0001.json` |
-
-Same information, different packaging. **This matters for multi-input runs:** with
-`json/per-request`, several inputs produce several result entries, and a client that
-reads `data[0]` silently drops the rest. `tva_api.fetch_results()` now warns when
-more than one is returned.
-
 ## Quick start — one command
 
 Nothing to build and nothing to fit — **no `atai_core`, no GPU, no AWS**. Python 3
@@ -116,17 +61,57 @@ python3 run_tva_example.py
 ```
 
 Upload video + SOP → create a bundle → run → stream `/logs` → download → print the
-report and score it. **~13 minutes** (754-814 s observed), of which ~7 is model
-loading — plus queue time if someone else has the single dev GPU.
+report and score it. Budget **20-30 minutes**, not the ~13 of job time: a run is
+754-1614 s once it starts (of which ~7 min is model loading, on every run, never
+cached) and **the queue is not included in that.** Dev has one GPU shared across
+orgs; observed waits range from 12 s to 796 s, and one 41-minute wall clock for a
+17-minute job. If nothing has happened for ten minutes, it is queued, not hung —
+`job.admitted` in `/logs` tells you which.
 
 To check every clip instead of one — same bundle, same SOP, one run per video:
 
 ```sh
-python3 sweep.py --list             # what is on disk, with labels. No API calls.
-python3 sweep.py --all --dry-run    # see the plan, no API calls
-python3 sweep.py --all              # one bundle, all 12 clips, sequential (~2.6 h)
-python3 evaluate.py eval_out/*.jsonl
+python3 sweep.py --list                    # what is on disk, with labels. No API calls.
+python3 sweep.py --all --dry-run           # see the plan, no API calls
+python3 sweep.py --all --submit-all        # queue all 12 up front, then collect
+python3 evaluate.py eval_out/tva-output-*.json
 ```
+
+**`--submit-all` holds your place in the queue; it does not run the clips in
+parallel.** Dev has one GPU and executes jobs one at a time regardless, so the wall
+clock stays hours either way — the paired 12-clip sweep took ~2.2 h this way against
+a ~2.6 h sequential estimate. What it prevents is losing the GPU *between* your
+clips: submitting one at a time leaves the slot unclaimed after each run, and a job
+from another org can take it. An 11-minute gap between `job.admitted` and a pod
+starting is the clearest case of that we saw.
+
+The trade-off is blast radius. Sequential submission costs one run if you got a value
+wrong; `--submit-all` costs all twelve. Run `--dry-run` first, and check the SOP and
+`values` it prints.
+
+**`--all` skips any clip already in `eval_out/`, so in a fresh clone of this repo it
+runs nothing.** The twelve outputs are committed, which is deliberate — the results
+are re-scorable offline and nobody has to spend 2.6 h of shared GPU to read this
+README. `--dry-run` says which it would run:
+
+```
+already done, would be SKIPPED (12):
+would run (0), sequentially, ~13 min each -> ~0 min (~0.0 h):
+```
+
+That is the resume behaviour working, not a failure: an interrupted sweep continues
+where it stopped instead of restarting. Two ways to actually run:
+
+```sh
+python3 sweep.py --all --submit-all --fresh          # re-run, REPLACING eval_out/
+python3 sweep.py --all --submit-all --out-dir eval_rerun   # or keep both side by side
+python3 evaluate.py eval_rerun/tva-output-*.json
+```
+
+`--out-dir` is the one to reach for when comparing configurations — it is how the
+paired sweep was kept separate from the original. `--fresh` refuses to write into
+`reference/`, which holds the committed outputs every number in this README is scored
+from.
 
 A sweep is hours long on a shared GPU, so two commands matter as much as the sweep
 itself. **The runs live on the platform, not in your client** — see
@@ -142,7 +127,7 @@ install step. Three of the four commands above touch no API at all, and scoring
 never does:
 
 ```sh
-python3 evaluate.py reference/*.jsonl
+python3 evaluate.py reference/*.json
 ```
 
 ## What comes back
@@ -154,109 +139,35 @@ python3 evaluate.py reference/*.jsonl
    "reason":"The video clearly shows the person picking up the blue cap and O-ring, then installing the O-ring onto the cap."}, …]}
 ```
 
-Five properties, none of them documented in the blueprint:
+Four properties will catch you out, none of them documented in the blueprint:
 
-- **`step` is 0-BASED.** A 3-step SOP returns steps 0, 1, 2. Humans write SOPs
-  1-based, so a scorer that joins them naively is off by one — and it fails
-  *quietly*. This example hit it for real: a scorer assuming 1-based read a
-  perfect 3-of-3 run as
-
-  ```
-  step 1: expected PASS  got PASSED        [OK]
-  step 2: expected PASS  got PASSED        [OK]
-  step 3: expected PASS  got NOT REPORTED  [MISS]   <-- the verdict existed, under step 2
-  ```
-
-  Two steps still line up, so it looks like a model that missed the last step
-  rather than a join bug. Verified on a real run, asserted in
-  `run_tva_example.STEP_BASE`, and auto-detected in `evaluate.py`.
-- **Timestamps in seconds come free.** The blueprint exposes only
-  `parser_output_frame_indices`; `timestamp_start`/`timestamp_end` are emitted
-  anyway, so no frames→seconds conversion is needed.
-- **Frame indices are SOURCE frames, not sampled frames.** `frame = timestamp ×
-  fps` held on every row (810 = 27.0 × 30). Sampled space would have capped at 63
-  at `max_frames: 64`.
-- **A `reason` string per step. Do not trust it as evidence.** It reads like a
-  report of what was on screen, and it sometimes is — it volunteered *"the blue
-  cap"* without the SOP mentioning colour. But the reason for a fabricated
-  observation is **word-for-word as confident as one for a real observation** (see
-  the results below), so it cannot distinguish the two.
-- **Unlike MGA, the output does NOT tile the timeline.** MGA segments
-  contiguously, so every second must be labelled; TVA emits one row per SOP step
-  and the rows can leave gaps. **TVA is verification, not segmentation.**
-- **`len(results)` is not the step count — the model LOOPS and the parser keeps
-  every repetition.** One run returned **21 rows for a 3-step SOP**: a placeholder
-  block (`reason: "..."`, no timestamps) followed by the real answer emitted **six
-  more times**. Another returned 9. The parser regex-matches every occurrence
-  rather than stopping at one complete block, so collapse by `step` before scoring,
-  and prefer the informative row — a placeholder can arrive *first*.
-
-  **This is not cosmetic. The loop consumes the budget the verdicts need**, which
-  makes it the likely root cause of the empty results rather than a separate quirk:
-
-  | same clip | repetition | outcome |
-  |---|---|---|
-  | at 5760 | 6 redundant blocks ≈ **788 tokens, 14% of the budget** | 21 rows, verdicts correct |
-  | at 8192 | ~12 blocks ≈ **1,575 tokens, inside `<think>`** | `</think>` never reached → **0 rows** |
-
-  So "the budget is too small" understates it: the model spends the window
-  re-emitting an answer it already has. **Tightening the SOP does not help** — the
-  SOP governs what is judged, not when generation stops, and the one stricter SOP
-  tried here returned zero rows. The levers that would fix it are decoding
-  parameters the engine supports and this blueprint does not expose:
-
-  | lever | status |
-  |---|---|
-  | **arity validation against the SOP** | ❌ — the pipeline *has* the step count and does not use it |
-  | `repetition_penalty` | ❌ not exposed on `tva` — was wired on MGA's superseded `blp_76kyqm…` |
-  | `stop` | ❌ same |
-  | parser halting after one complete block | platform-side |
-
-  The first is the cheapest and most surprising gap: `PrepareSOPNode` accumulates a
-  known number of SOP lines, and `TaskVerificationResultsParserNode` independently
-  regex-matches verdict lines and emits every match. **Nothing compares the two.**
-  A 3-step SOP returning 21 rows is self-evidently wrong and could be caught — or
-  at least flagged — inside the pipeline.
-
-  When it duplicates is also patterned, though on few observations:
-
-  | clip | at 8192 | at a reduced budget |
-  |---|---|---|
-  | all steps correct | 1 block | 1 block |
-  | o-ring omitted | 1 block, or empty | **3 blocks** |
-  | o-ring **and** wrench omitted | empty | **7 blocks** |
-
-  Duplication has only appeared on clips **containing an omission**, and only below
-  8192; all-pass clips have never duplicated at any budget, including the one where
-  this clip produced seven blocks. Multiplicity tracks the number of omissions.
-  That fits a model less certain when asserting an absence and re-deriving its
-  answer — but it is two duplicating runs, so treat it as a correlation with a
-  plausible story rather than a demonstrated mechanism.
-
-- `.env` in the repo root:
-
-  ```
-  ATAI_API_KEY=<dev API key>
-  ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
-  ```
-
-- **Python 3.** Stdlib only.
-- **Nothing else.** The clips are committed in `data/clips/`, so there is no fetch
-  step and no media tooling to install.
-
-⚠️ **The `/agents` API is dev-only.** A prod endpoint
-(`api.u1.archetypeai.app`) returns **404 for every `/agents` path**, which reads
-like an unregistered blueprint rather than the wrong host. A prod key on the dev
-host returns 401. Both mistakes cost time here; `tva_api.py` now warns when the
-endpoint is not dev.
+- **`step` is 0-BASED.** A 3-step SOP returns 0, 1, 2. A scorer that assumes 1-based
+  reads a *perfect* run as 2-of-3 — which looks like a model that missed the last
+  step, not a join bug. `evaluate.py` auto-detects it.
+- **`frame_*` are SOURCE frames, not sampled ones** — `frame = timestamp × fps`
+  (810 = 27.0 × 30), so they exceed `max_frames`. Seconds come free either way.
+- **`len(results)` is not the step count.** The model repeats itself and the parser
+  keeps every repetition: 21 rows for a 3-step SOP, once. Collapse by `step` and
+  prefer the informative row — a placeholder (`reason: "..."`, no timestamps) can
+  arrive first. This is also the likely cause of the empty results; see
+  [Lesson 4](#4-bigger-budgets-do-not-buy-answers).
+- **Do not trust `reason` as evidence.** It reads like a report of what was on
+  screen, but a fabricated observation is word-for-word as confident as a real one.
+  [Why, with the frames to prove it.](#rewriting-the-sop-does-not-fix-it-and-the-reason-field-is-not-evidence)
 
 ## Stage 1 — Select clips, and check what the labels actually mean
 
-Twelve takes of the same three-step assembly, 21–43 s each, 640×480 or 1920×1080,
-30 fps. **Ground truth is encoded in the filename** —
+Twelve takes of the same three-step assembly, 21–43 s each, 30 fps — ten at 640×480
+and two at 1920×1080. **Ground truth is encoded in the filename** —
 `1_pass_2_pass_3_fail_A.mp4` means step 1 correct, step 2 correct, step 3 not; the
 trailing letter is a take id. That keeps the labels visible in `ls` and impossible
 to desynchronise from the media.
+
+The resolution spread matters less than it looks: **every frame is resized to
+`size × size` (224 by default) before the model sees it**, so a 1080p source is
+downscaled 8.6× and ends up with no more detail than a 640×480 one. Worth
+remembering when judging whether a small part is visible — the answer is about 224,
+not about the source.
 
 ```sh
 python3 sweep.py --list
@@ -276,11 +187,14 @@ FAILED   the step was attempted and done wrong
 MISSING  the step never happened
 ```
 
-For this set **`MISSING` is the status that matches the video** and `FAILED` is the
-one worth a second look — the opposite of what the label word "fail" suggests.
-A binary pass/fail label cannot express that distinction, so `evaluate.py` scores
-the verdict (PASSED vs not) and reports the FAILED/MISSING split separately rather
-than hiding it inside one accuracy number.
+For this set **`MISSING` is the status that matches the video**, and the naming is the
+opposite of what the label word "fail" suggests. That prediction held completely:
+across 12 clips, 8 SOP variants, 4 blueprint versions and every budget tried,
+**`FAILED` has never once been emitted.** Every non-PASSED verdict has been `MISSING`.
+
+A binary pass/fail label cannot express that distinction, so `evaluate.py` scores the
+verdict (PASSED vs not) and reports the split separately rather than hiding it inside
+one accuracy number.
 
 **Step 2 is `pass` in all twelve clips**, so read its column as a consistency
 check rather than as a detection result — "always say PASSED" also scores 100% on
@@ -290,8 +204,8 @@ accuracy.
 
 **These clips have no audio track at all** — verified with `ffprobe`: one video
 stream, no audio stream. The blueprint runs `audio_reader → whisper →
-prompt.audio` regardless. It does **not** fail: whisper loads (36 s download,
-3.3 s load, every run) and contributes nothing. So ~40 seconds of every run is
+prompt.audio` regardless. It does **not** fail: whisper loads (35–36 s download,
+3.3–4.3 s load, on every run) and contributes nothing. So ~40 seconds of every run is
 spent loading a model that cannot help, and **the audio half of the fusion is
 untested by this example.** MGA's run C proved the audio path carries real signal
 on a narrated video; nothing here exercises it.
@@ -305,8 +219,9 @@ having merged nothing and the failure surfaced several steps later.
 
 ## Stage 2 — Write the SOP (the only lever you have)
 
-The SOP is a **text file, one step per line**, and it lives at
-[`sop/oring.txt`](sop/oring.txt):
+The SOP is a **text file, one step per line**. The baseline is
+[`sop/oring-numbered.txt`](sop/oring-numbered.txt) — the default for every script
+here, and what produced every result in this README:
 
 ```
 Step 1: Install the rubber O-ring into the blue block-off cap, ensuring it is properly seated in the groove.
@@ -331,76 +246,69 @@ is your entire influence over the model.** Three choices in the wording above:
 | **Named colours** ("blue cap", "black manifold") | The bench holds a blue anodized cap and a black manifold with other blue and black fittings beside them, so "the cap" is genuinely ambiguous at 224×224. Insurance, not a fix: the model already said *"the blue cap"* unprompted. |
 | **Behavioural, not numeric** | The SOP says "tighten to the specified torque", not "to 12 Nm". Nothing in a 30-second handheld video can evidence a number, so asking for one invites a guess. |
 
-`sop/oring.txt` is uploaded **as itself** — same bytes, same name (`oring.txt`),
-no generated copy — so the file you edit, the file on the platform and the text the
-model sees cannot drift apart. Provenance for past runs comes from git, where the
-SOP is committed, rather than from the platform's file list.
+[`sop/oring.txt`](sop/oring.txt) holds the same three steps **without** the `Step N:`
+prefixes — the bare format the design doc shows. **The prefixed one is the baseline
+because the format decides whether a defect-bearing clip answers at all.** A controlled
+2×2, `max_new_tokens` pinned to 5752 so the format was the only variable, each cell
+reproduced byte-identically:
 
-### A second SOP, for testing whether wording can fix the blind spot
+| | `oring-numbered.txt` | `oring.txt` (bare) |
+|---|---|---|
+| all steps performed | 3 rows · 3/3 ✅ | 3 rows · 3/3 ✅ |
+| steps 1 and 3 skipped | **21 rows · 3/3** ✅ | **0 rows · no verdicts** ❌ |
 
-[`sop/oring-strict.txt`](sop/oring-strict.txt) is the same three steps with an
-explicit evidence requirement added to each line:
+The prefixed format *duplicates* the `[index]` the pipeline already adds, and is
+therefore the one the doc implies you should not use — and it is the one that answers.
+Note that the easy clip cannot see this: both score 3/3 there, so **a smoke test on a
+clean recording would have concluded the formats are equivalent.** Outputs for all four
+cells are in [`reference/grid-5752/`](reference/grid-5752):
 
-> Step 1: Install the rubber O-ring into the blue block-off cap. **Report PASSED
-> only if the O-ring is visibly a separate loose part in the hands and is then
-> seated into the cap's groove on camera. If the cap is picked up and used without
-> that fitting action being visible, report MISSING.**
+```sh
+python3 evaluate.py reference/grid-5752/*.json
+```
 
-It exists because the baseline SOP produced `PASSED` on **all four** clips where the
-O-ring was never fitted, inventing detail like *"stretching the O-ring"*. If the
-model can be told not to assume, that is the cheapest possible mitigation.
+This is about *whether* you get output, not about what the verdict says — no format
+changed a verdict (see [Lesson 3](#3-the-sop-is-not-the-lever-and-the-prompt-is-not-the-gap)).
 
-Two things deliberately absent, both from MGA's experience: **no output-format
-instruction** — the results parser owns the template, and a prompt specifying its
-own format makes it return zero steps — and **no numeric torque value**, since
-nothing in a handheld video can evidence a number.
+The uploaded text is exactly the step lines, with blanks and `#` comments stripped, so
+the file you edit and the text the model sees cannot drift apart. Provenance comes
+from git, where every SOP is committed — not from the platform's file list, which only
+holds whatever was uploaded last.
 
-#### Result: it returned NOTHING, and not for the reason you would guess
+### Do not put status instructions in an SOP
 
-Run on `1_fail_2_pass_3_pass_A` — the clip that produced a false `PASSED` on the
-baseline SOP — the strict SOP produced **zero rows**:
+[`sop/oring-strict.txt`](sop/oring-strict.txt) adds an evidence requirement to each
+line — *"Report PASSED only if the O-ring is visibly a separate loose part in the
+hands… otherwise report MISSING"* — and returned **zero rows**, in a way that is not
+the context ceiling:
 
-| | the two context-exhausted runs | the strict-SOP run |
+| | the context-exhausted runs | the strict-SOP run |
 |---|---|---|
 | `WARN … reasoning block` | present | **absent** |
-| ERROR row | none | none |
 | rows emitted | 0 | 0 |
-| generation | 1174 s / 1055 s | 998 s |
 
-**No warning at all.** So this is a different failure from the context ceiling: the
-model generated for over nine minutes and the parser matched none of it.
+**No warning at all**: the model generated for over nine minutes and the parser
+matched none of it. The likely cause is that those clauses instruct the model about
+**status values**, which is output-shaping however it reads — and MGA established the
+same failure, where a prompt specifying its own layout makes the parser return zero
+steps. TVA has no `prompt` value, but the SOP is a place to make the identical
+mistake.
 
-The likely cause is that the added clauses instruct the model about **status
-values** — *"Report PASSED only if…"*, *"report MISSING"* — which is output-shaping,
-not judgement-shaping, however it reads. MGA's example established that a prompt
-saying what to *cover* parses cleanly while one saying how to lay out the answer
-makes `ManualGenerationResultsParserNode` return zero steps. **TVA has no `prompt`
-value, but the SOP is a place to make exactly the same mistake.** Confirming it
-needs a run with `parser_compute_stats: true`, which attaches template-conformance
-stats — that is what the value is for.
+So describe the step and leave the verdict vocabulary to the parser, which already
+has those instructions in its system message ([below](#what-the-system-message-already-demands)).
 
-Two conclusions, and the second is the useful one:
+Two honest caveats. This is **one run on one clip**, and a later variant using the
+same `report PASSED / Otherwise report MISSING` phrasing *did* produce a parser
+warning with three drafted rows — a different failure — so "status words break the
+parser" is plausible, not established. And it does not matter much either way:
+**rewriting the SOP does not fix the blind spot at all.** Eight variants across five
+mechanisms were tried, including a faithful port of a prompt that scored 98% on these
+clips elsewhere, and not one verdict changed —
+[the null result](#rewriting-the-sop-does-not-fix-it-and-the-reason-field-is-not-evidence).
 
-- **Do not put output or status instructions in an SOP.** Describe the step. The
-  parser owns the verdict vocabulary, and competing with it costs a full run and
-  returns nothing — strictly worse than the false pass it was meant to fix, because
-  a false pass is at least visible.
-- **The prompt is not the lever for the blind spot.** The obvious wording fix
-  cannot even be evaluated, so `size` — a ~10 mm o-ring at 224×224 — is where to
-  look next. `size` is exposed and honoured, and `null` keeps source resolution.
-
-Had it instead returned `MISSING`, that would *still* not have settled anything:
-step 1's confusion matrix is `TN=0`, so TVA has never been observed correctly
-rejecting that step, and "it started looking" would have been indistinguishable
-from "it became pessimistic and now fails the six clips where the O-ring *was*
-fitted" without a `1_pass` control. Trading an invisible false-pass problem for an
-invisible false-fail one is not an improvement.
-
-**Keep SOP files free of comments.** `load_sop()` does strip `#` lines, but a file
-that needs stripping no longer uploads as itself — it uploads as a generated
-normalized copy, reintroducing exactly the drift between the file you edit and the
-bytes the model sees that this design avoids. Put rationale in the README, not in
-the SOP.
+**Comments in SOP files are free.** `load_sop()` strips `#` lines and blanks, and only
+the surviving step lines are uploaded — verified against the platform copy. Each
+variant in [`sop/`](sop) carries its own rationale block for that reason.
 
 ### The SOP has an expected format, and it is in the design doc
 
@@ -409,9 +317,7 @@ The doc is explicit that this matters:
 > *"the specific details and format of the system and instruction are important and
 > **should not be arbitrarily set or modified**"*
 
-and its golden reference (extracted from the doc's own figure, committed as
-[`reference/doc-sop-instruction-format.png`](reference/doc-sop-instruction-format.png))
-is two lines:
+and its golden reference is two lines:
 
 ```python
 steps = [f"[{index}] {sop_step}" for index, sop_step in enumerate(video_sop_steps)]
@@ -419,9 +325,7 @@ instruction = f"Steps: {steps}"
 ```
 
 **The pipeline adds its own `[index]`, and `enumerate` makes it 0-based.** The
-system message
-([`reference/doc-system-message.png`](reference/doc-system-message.png)) then
-instructs the model in the same scheme:
+system message then instructs the model in the same scheme:
 
 > *"where N is the step's number written as a plain integer **starting at 0** (the
 > first step is `step 0:`, the second is `step 1:`…)"*
@@ -451,52 +355,24 @@ because **every committed result was produced with it**, before the example was
 found. Its prefixes double up on the automatic index (`[0] Step 1: …`) with
 disagreeing numbers; whether that cost anything is still untested.
 
-### JSON or JSONL? Both — and it matters when you merge
+### Do not key anything off the output extension
 
-Three things disagree about this, so it is worth stating plainly:
+Every output in this repo is saved as `.json`, which is what the payload is: **one
+JSON object, with no trailing newline.** But the platform's own extension is not
+derived from the declared sink format and has changed mid-session — the same pinned
+blueprint, `format: jsonl/per-request` throughout, emitted `.jsonl` at 21:46 and
+`.json` at 23:37 with nothing differing caller-side.
 
-| | |
-|---|---|
-| the sink format | `jsonl/per-request` |
-| the filename the platform returns | `…__output_<clip>.`**`json`** |
-| the bytes on disk | **one** JSON object, **no trailing newline** |
+So match on `__output_` and strip whatever suffix is there, as `--collect` does, and
+read `format` as a contract about record structure rather than filenames. The
+apparent "TVA uses JSON, MGA uses JSONL" split was an artefact of comparing runs from
+either side of a platform-side change; both emit `.json` now.
 
-**JSONL is the format contract, not a description of these files.**
-`jsonl/per-request` means *one JSON record per request* — and a run here processes
-one video, so there is exactly one record, byte-identical to plain JSON. The `l`
-only materialises when a run has several source inputs, where you get one line per
-input. This repo names its copies `.jsonl` after the sink format; the platform's
-`.json` is why an earlier version of `--collect` saved files as
-`<clip>.json.jsonl`.
+**The missing trailing newline is a real trap when merging:**
 
-**The extension is not derived from the sink format, and it changed mid-session.**
-The same pinned blueprint, with `format: jsonl/per-request` throughout, emitted
-both:
-
-| run | UTC | emitted |
-|---|---|---|
-| `agt_7xa5n8yy…` | 21:46 | `…_1_pass_2_pass_3_pass_A.`**`jsonl`** |
-| `agt_2jcbx7ka…` | 23:37 | `…_1_pass_2_pass_3_pass_A.`**`json`** |
-
-Nothing caller-side differed. And the declared format does not predict the
-extension in either agent: `mga` declares `json/per-request` and emitted `.jsonl`
-at 19:57, while `tva` declares `jsonl/per-request` and emitted `.jsonl` then
-`.json`.
-
-**Confirmed: the two agents do not use different formats by design.** MGA now
-emits `.json` too, so its earlier `.jsonl` artifact predates a platform-side change
-that both agents follow. The apparent "TVA uses JSON, MGA uses JSONL" difference
-was an artefact of comparing runs from either side of that change.
-
-Two consequences: **do not key anything off the output extension** (match on
-`__output_` and strip whatever suffix is there — `--collect` does), and treat the
-`format` value as a contract about record structure rather than about filenames.
-
-The consequence is a real trap. **Because there is no trailing newline,
-concatenating outputs corrupts them:**
-
+```sh
+cat out_A.json out_B.json > merged.json   # ONE line, two objects, parses as neither
 ```
-cat out_A.jsonl out_B.jsonl > merged.jsonl   # ONE line, two objects, parses as neither
 
 ### What the system message already demands
 
@@ -597,164 +473,92 @@ a sign you have put something in `values` that belongs in a connector.
 python3 run_tva_example.py --dry-run     # print the exact payloads, call nothing
 ```
 
-Only two values are worth setting, and both are honoured:
+Three values exist and all are honoured:
 
-| Value | This example sends | Honoured? | Notes |
+| Value | This example sends | Highest tried | Notes |
 |---|---|---|---|
-| `max_frames` | **64** | ✅ | Blueprint default is 16 — on a 30 s clip that is one frame every 1.9 s. 64 is also the reader/preprocessor batch size, so frames land in one batch. |
-| `max_new_tokens` | **5120** | ✅ | **Reserved up front, so `prompt + this <= 8192`.** At `max_frames: 64` the ceiling is 5,824 — 8192 and 8191 both fail, at different stages. At 2048 the clips that matter return nothing. See below. |
-| `size` | not sent (224) | ✅ | Every frame is resized to 224×224, so 1080p clips are no better than 480p — only slower to upload. |
+| `max_frames` | **64** | 64 | Blueprint default is 16 — one frame every 1.9 s on a 30 s clip. 64 is also the reader/preprocessor batch size, so frames land in one batch. Also run at 32 and 16. |
+| `max_new_tokens` | **5760** | **16384** | Shares the context window with the prompt. 16384 — the blueprint's own default — ran fine, which puts the served `max_seq_len` at **≥ 18,754**. It returned no more answers than 5760 did, so **the ceiling is deliberately not the default**: see [Lesson 4](#4-bigger-budgets-do-not-buy-answers). |
+| `size` | not sent (224) | **448** | Every frame is resized to `size × size`, so a 1080p clip carries no more detail than a 480p one. Tried once at 448 (with frames cut to 32 to fit) and it returned **no verdicts** — visual tokens grow quadratically, starving the generation. |
 | `prompt` | **does not exist** | — | Not a defect to work around, just absent. The SOP replaces it. |
 
-The preflight reads the blueprint document rather than hardcoding key names, so a
-value that is not wired is caught before spending GPU:
+The preflight reads the blueprint document rather than hardcoding key names, so an
+unwired value is caught before spending GPU, and every value is printed next to the
+blueprint's current default — which has changed under this example more than once:
 
 ```
+max_new_tokens not set -> using 5760 (the ceiling here is 16314; a bigger budget is
+more room to LOOP, not to reason — see api.DEFAULT_MAX_NEW_TOKENS).
+
   max_frames       64       -> honoured   (blueprint default: 16)
-  max_new_tokens   5120     -> honoured   (blueprint default: 2048)
+  max_new_tokens   5760     -> honoured   (blueprint default: 16384)
+  size             224      -> honoured   (blueprint default: 224)
 ```
-
-### `max_new_tokens` is the one value that decides whether you get an answer
-
-f1-0 emits a `<think>` reasoning block before its verdicts, and **that block shares
-the output budget.** If the budget runs out inside it, the parser has nothing to
-parse and the run returns an empty result:
-
-```
-23:02:32  WARN     parser.running   TaskVerificationResultsParserNode: generation ended inside
-                                    the model's reasoning block (no `</think>`), so it never
-                                    produced an answer; dropping 0 rehearsed row(s).
-                                    Raise `max_new_tokens` if the reasoning was truncated.
-23:02:32  INFO     completed        Agent execution terminated successfully
-23:02:35  SUCCESS  job.completed    Job completed in 814s
-```
-
-Note what that run reported: **`job.completed`, no ERROR row, and
-`{"id":"1_pass_2_pass_3_fail_A","results":[]}`** — 44 bytes. A caller checking the
-job verdict concludes success.
-
-**The budget needed depends on the answer, and the hard cases need more.** At
-`max_new_tokens: 2048`:
-
-| clip | outcome at 2048 |
-|---|---|
-| `1_pass_2_pass_3_pass_A` — everything done correctly | **3 of 3 verdicts**, 678 bytes |
-| `1_pass_2_pass_3_fail_A` — step 3 skipped | **empty**, budget spent inside `<think>` |
-
-So the clean clip succeeds and **the clip you actually care about silently returns
-nothing.** For a verification agent that is the worst possible failure shape: it
-fails only on the inputs that contain a defect. Any accuracy figure gathered
-without checking for this is measuring the easy half of the set.
-
-This repo therefore sends **8192**, and treats the overflow as its own outcome
-rather than as success — `poll_logs()` returns `empty-reasoning-overflow`,
-`run_tva_example.py` exits non-zero, and `--show` on an empty file names the cause
-and the fix.
-
-### Set values explicitly — but know that pinning has a cost too
-
-The blueprint's own `max_new_tokens` default changed from **2048 to 8192 during
-this session**. Both halves of the usual advice failed here:
-
-- **Relying on the default** means your runs change behaviour when someone
-  republishes the blueprint, with nothing in your code or output to say so.
-- **Pinning a value** froze this example at 2048 — the old default — which is
-  exactly the value that produces empty results. The upstream bump to 8192 was
-  almost certainly the fix for this overflow, and pinning opted out of it.
-
-The lesson is not "pin" or "don't pin". It is that **neither protects you, and the
-only thing that caught this was reading the log.** Hence the preflight printing
-every value next to the blueprint's current default, so a divergence is visible
-before the run rather than inferred afterwards.
 
 ## Stage 4 — Run
 
 ```sh
 python3 run_tva_example.py                    # one clip, the default
-
-# several clips, run one at a time. Stems are SPACE-separated, from --list.
 python3 sweep.py --clips 1_pass_2_pass_3_fail_A 1_fail_2_pass_3_pass_A
-
-python3 sweep.py --all --dry-run              # the plan, no API calls
-python3 sweep.py --all                        # all twelve, ~2.6 hours
-
-# --all reuses ONE bundle and skips clips already in eval_out/, so an
-# interrupted sweep resumes rather than restarting. Ctrl-C cancels the
-# in-flight run instead of orphaning it on the shared GPU.
+python3 sweep.py --all --submit-all           # all twelve — see Quick start
 ```
+
+Ctrl-C cancels the in-flight run rather than orphaning it on the shared GPU.
 
 ### If the client dies, the runs do not
 
-The runs live on the **platform**, not in the client. A closed laptop, a dropped
-network, a Ctrl-C or an exhausted retry budget abandons results that are already
-computed — and run outputs do not expire. So there is a recovery path, and no
-reason to ever re-run a sweep because nobody was listening:
+The runs live on the **platform**, and outputs do not expire — so a closed laptop or a
+Ctrl-C never costs a sweep:
 
 ```sh
-python3 sweep.py --collect                    # harvest every finished run
-python3 sweep.py --collect --bundle bnd_5a33…  # just one sweep's runs
+python3 sweep.py --collect                     # harvest every finished run
+python3 sweep.py --cancel-all                  # an abandoned run holds the GPU
 ```
 
-It skips clips already on disk and ignores runs still in flight, so it is safe to
-run repeatedly while a sweep is still going. It also asks each run for its results
-regardless of the instance `status`, because that field is not a reliable
-terminality signal.
+`--collect` is safe to repeat mid-sweep: it skips what is on disk, ignores runs still
+in flight, and asks for results regardless of the instance `status`, which is not a
+reliable terminality signal.
 
-`python3 sweep.py --cancel-all` is the other half: an abandoned run holds the
-shared GPU, so cancel what you are not waiting for.
-
-Timings from real runs, and they are dominated by cold start:
+### Cold start dominates, and nothing is cached
 
 | phase | time |
 |---|---|
-| whisper download + load | 36.2 s + 3.3 s |
-| **newton-fusion download + load** | **5min 0s + 1min 39s** |
-| graph execution, 31 s clip | ~5 min 20 s |
-| **total** | **763 s (12.7 min)** |
+| whisper download + load | 35–36 s + 3.3–4.3 s |
+| **newton-fusion download + load** | **~5 min + ~1.5 min** |
+| generation, 31 s clip | ~5 min |
+| **total** | **763–1614 s** |
 
-**Nothing is cached between runs.** Two back-to-back runs on the same GPU each
-downloaded newton-fusion from scratch — 5 minutes, twice. **~7 of every 13 minutes
-is model loading**, so the marginal cost of one more clip is far lower than the
-first, and batching with `sweep.py` is worth it.
+Two back-to-back runs on the same GPU each downloaded newton-fusion from scratch. So
+**~7 of every 13 minutes is model loading**, and the marginal cost of one more clip in
+a sweep is far lower than the first.
 
-**Generation is deterministic — for short outputs, thoroughly verified.** The same
-clip and SOP has now reproduced byte-identically across:
-
-| varied | still identical? |
-|---|---|
-| two API keys in two different orgs, 25 min apart | ✅ |
-| budgets 8192 / 5760 / 5752 (the surplus is unused) | ✅ md5 `ed8116176e6e` |
-| **10 hours apart** | ✅ md5 `c592168b5c58` |
-| **two different blueprint versions** (pinned and canonical) | ✅ same digest |
-| **two runs launched 3 seconds apart** (an A/A test) | ✅ same digest |
-
-So a matching digest means an exact reproduction, and a differing one means something
-real changed. That is a strong result: it rules out platform drift, blueprint
-difference, and randomness as explanations for anything else in this document.
-
-⚠️ **But every one of those runs produced a ~800-byte output.** On the clip whose
-output runs to 3,675 bytes — right at the `</think>` boundary — the pinned and
-canonical blueprints **disagree**: one emitted 21 rows, the other rehearsed the same
-21 and dropped them. Determinism at that length is **untested**; an A/A pair on that
-clip is the experiment that would settle it. Until then, treat digests as reliable
-for outputs comfortably inside the budget and unproven for outputs near it.
-
-**Dev serializes these jobs.** Run 2 was submitted while run 1 held the GPU and
-waited **7 minutes** for it. Note the trap:
+**Dev serializes jobs**, and `job.admitted` is misleading about when yours starts:
 
 ```
-21:51:57  job.admitted   Job scheduled after 12s in queue     <-- misleading
+21:51:57  job.admitted   Job scheduled after 12s in queue     <-- not the real start
 21:59:00  job.started    Job started — first pod is now running
 ```
 
-`job.admitted` reports a 12-second queue and then the pod does not start for seven
-minutes. **Judge the real start from `job.started`, not from `job.admitted`.**
+Seven minutes between them, because another run held the GPU. Judge the real start
+from `job.started`.
+
+### Generation is deterministic — for short outputs
+
+The same clip and SOP reproduced **byte-identically** across two orgs' API keys, three
+budgets, a 10-hour gap, two blueprint versions, and an A/A pair 3 seconds apart. So a
+matching md5 means an exact reproduction, and a differing one means something real
+changed — which rules out drift and randomness as explanations elsewhere in this
+document.
+
+⚠️ All of those outputs were ~800 bytes. At 3,675 bytes — right at the `</think>`
+boundary — two blueprint versions **disagreed**: one emitted 21 rows, the other
+rehearsed the same 21 and dropped them. Digests are unproven near the budget.
 
 ## Stage 5 — Evaluate
 
 ```sh
-python3 evaluate.py reference/*.jsonl
-python3 evaluate.py eval_out/*.jsonl --verbose    # with the reason for every step
+python3 evaluate.py reference/*.json
+python3 evaluate.py eval_out/tva-output-*.json --verbose    # with the reason for every step
 ```
 
 Offline and stdlib-only — no API key, no network — so re-scoring is free and
@@ -775,7 +579,7 @@ All twelve clips, one SOP, `max_frames: 64`, `max_new_tokens: 8192`. Committed
 under [`reference/sweep/`](reference/sweep), so this is re-scorable offline:
 
 ```sh
-python3 evaluate.py reference/sweep/*.jsonl
+python3 evaluate.py reference/sweep/*.json
 ```
 
 ```
@@ -796,10 +600,11 @@ clip                                    step 1            step 2            step
 overall step accuracy: 26/36 (72.2%)
 step 1: 6/12 (50%)   step 2: 10/12 (83%)   step 3: 10/12 (83%)
 step 1 confusion: TP=6 TN=0 FP=4 FN=0 — all four errors are FALSE PASSES
-status distribution: PASSED=26, FAILED=0, MISSING=3
+status distribution: PASSED=27, FAILED=0, MISSING=3
+                     (27 + 3 = 30 = the 10 clips that answered x 3 steps)
 ```
 
-**Ignore the 72.7%.** It averages a step with no negative examples (step 2) against
+**Ignore the 72.2%.** It averages a step with no negative examples (step 2) against
 two that behave completely differently, and the difference between them is the
 whole result:
 
@@ -815,662 +620,295 @@ reason (*"The installation of the O-ring into the blue cap is not shown in the
 video."*), and a repeat at a near-identical budget produced **byte-identical
 output**. Two of two.
 
-The full replication grid, four runs per clip:
+A second sweep of all twelve clips, with **stem-matched SOPs** (`--pair-sop`, the
+pairing the platform team recommends) and the same SOP text, reproduced the finding
+exactly — 22/33 overall, and **step 1 correct on 6 of 6 `1_pass` clips and 0 of 6
+`1_fail` clips.** Committed in [`eval_paired/`](eval_paired):
 
-| clip | numbered @8192 | numbered @5760 | numbered @5752 | plain @5758 |
-|---|---|---|---|---|
-| `1_pass_2_pass_3_pass_A` | 3 rows ✅ | 3 rows ✅ | 3 rows ✅ | 3 rows ✅ |
-| `1_fail_2_pass_3_fail_A` | **empty** | 21 rows ✅ | 21 rows ✅ | **empty** |
-
-Within a configuration the output is **byte-identical** — md5 `ed8116176e6e` for the
-easy clip across three budgets, md5 `3ef2d7fb07d8` for the hard clip across two. So
-**generation is deterministic; it is the configuration sensitivity that is
-extreme.** Raising the budget from 5760 to 8192 turns a correct answer into no
-answer at all, which is the opposite of what "more room to reason" suggests.
-
-Two consequences worth being blunt about:
-
-- **An earlier version of this README called this clip "unstable" and a "coin
-  flip".** That was wrong. Same input, same bytes, every time. The variation came
-  from the configurations being different, and the correction matters because
-  "unstable" would mean the numbers cannot be trusted, whereas "config-sensitive"
-  means they can — provided the configuration is stated with them.
-- **The non-documented SOP is the one that works on the hard clip.** `plain @5758`
-  returned empty where `numbered @5760` returned correct verdicts. That is a single
-  observation and not a conclusion, but it means adopting the documented format may
-  be a downgrade for precisely the defect-bearing inputs, and it should be tested
-  before anyone treats the format switch as an improvement.
-
-#### The false pass survives every configuration a caller can reach
-
-Clip `1_fail_2_pass_3_pass_E` — o-ring omitted, wrench used — was re-run with half
-the frames and a larger budget:
-
-| | frames | budget | step 1 |
-|---|---|---|---|
-| original | 64 | 8192 | **PASSED** ❌ |
-| re-run | **32** | **6536** | **PASSED** ❌ |
-
-Identical false pass, with the same invented detail (*"installing the O-ring"*). So
-neither of the two levers available from a bundle touches it: **it is not a sampling
-artifact and not a budget artifact.** That is the strongest form of this finding — the
-blind spot is a property of what the model can see, not of how the run was configured.
-
-It also confirms the difficulty gradient: this clip *produced output* at 32 frames /
-6536, the exact configuration where the double-omission clip returned nothing.
-
-#### The reason for a real observation and an invented one are the SAME SENTENCE
-
-This is the finding to take away, and it is worse than "sometimes wrong". Compare
-the reason given where the o-ring **was** fitted against one where it **never
-was**:
-
-```
-o-ring WAS fitted    "The video clearly shows the person picking up the O-ring and the
-(1_pass_..._pass_A)   blue cap, then stretching the O-ring over the cap and seating it
-                      properly."
-
-o-ring NEVER fitted  "The video clearly shows the person picking up the blue cap and
-(1_fail_..._pass_B)   O-ring, stretching the O-ring, and placing it onto the cap groove."
+```sh
+python3 evaluate.py eval_paired/tva-output-*.json
 ```
 
-Same opening clause. Same *"clearly shows"*. Same *"stretching the O-ring"*. Same
-seating-in-the-groove conclusion. **There is no hedge, no lowered confidence, and
-no linguistic tell** distinguishing the observation from the fabrication.
+Pairing changed only *how* the failures present — two clips that false-passed
+unpaired returned nothing instead — so the step-1 error count fell from 4 to 2 purely
+because wrong answers became no answers. Not an improvement.
 
-So the `reason` field — the thing that makes TVA look auditable, and the feature a
-QA reviewer would most want to rely on — **cannot be used as evidence or as a
-confidence signal.** A reviewer reading these two strings cannot tell which one
-describes something that happened. Treat `reason` as a fluent restatement of the
-SOP step, not as a report of what was seen.
+### Rewriting the SOP does not fix it, and the reason field is not evidence
 
-#### It does not hedge on the o-ring — it confabulates the action
+Seven SOPs were tried on the two hardest clips, chosen to fail for different reasons.
+All are committed under [`sop/`](sop), all results under [`eval_iter/`](eval_iter):
 
-The three false passes describe, in detail, an installation that never happened:
-
-```
-1_fail_2_pass_3_pass_A   PASSED [2.0-5.0s]   "…picking up the blue cap and O-ring, then
-                                              placing the O-ring into the groove of the blue cap."
-1_fail_2_pass_3_pass_B   PASSED [1.0-6.0s]   "…picking up the blue cap and O-ring, STRETCHING the
-                                              O-ring, and placing it onto the cap groove."
-1_fail_2_pass_3_pass_E   PASSED [3.0-14.0s]  "…picking up the blue cap and installing the rubber
-                                              O-ring onto it."
-1_fail_2_pass_3_pass_F   PASSED [2.6-4.4s]   "…picking up the blue cap and installing the O-ring
-                                              onto it."
+```sh
+python3 iterate_sop.py --compare
 ```
 
-"Stretching the O-ring" is a specific, plausible, entirely invented observation.
-**A reason field that reads as careful evidence is not evidence that the model
-looked.** Compare the wrench, where it correctly reasons from *absence*:
+**Five declarative variants gave byte-for-byte the same wrong answer.** Same
+blueprint, same 64 frames, same 8192 budget — only the text differed:
 
-```
-1_pass_2_pass_3_fail_A   MISSING  "The video ends immediately after the cap is threaded on by
-                                   hand; no wrench is shown and no tightening action takes place."
-```
-
-That asymmetry is the deployable conclusion: **TVA is reliable for "was this tool
-used" and unreliable for "was this small part fitted"** — and it fails in the
-dangerous direction, passing work that was not done. On this evidence, do not
-deploy it as an unattended gate on small-part steps. `max_frames: 64` on a 21 s
-clip samples every 0.33 s, so this is not a sampling artifact; every frame is
-resized to 224×224, which is the more likely culprit.
-
-**`FAILED` was never emitted once** — 24 PASSED, 3 MISSING, 0 FAILED. That matches
-what the clips contain (omissions, not botched attempts), so the status choice is
-correct; it also means nothing here exercises `FAILED`.
-
-#### The real ceiling is `max_seq_len: 8192`, and it is not exposed
-
-Two clips returned `results: []`, both `1_fail` clips. The log on the hardest one —
-both steps 1 and 3 skipped — is the most revealing line in this whole example:
-
-```
-WARN  TaskVerificationResultsParserNode: generation ended inside the model's reasoning
-      block (no `</think>`), so it never produced an answer; DROPPING 37 REHEARSED ROW(S).
-```
-
-**The model produced 37 candidate verdict rows inside its reasoning and every one
-was discarded**, because the closing `</think>` never arrived within the budget.
-The answer existed; the harness threw it away. Note also 1174 s of runtime for a
-21-second clip — the reasoning is where the time goes.
-
-**And "raise `max_new_tokens`" does not fix it**, which is what the platform's own
-warning suggests and what an earlier version of this README said. Two separate
-checks bound it, and they fire at different times:
-
-```
-# at graph instantiation, ~40 s in (after whisper loads)
-ERROR  invalid node config: max_new_tokens (8192) must be below max_seq_len (8192)
-
-# at fusion time, ~7 MINUTES in (after newton-fusion loads)
-ERROR  preparing Newton request: estimated prompt 2368 tokens + 8191 reserved for
-       generation exceeds max_seq_len=8192; use fewer frames or raise max_seq_len /
-       lower max_new_tokens
-```
-
-So **`max_new_tokens` is RESERVED UP FRONT**, not a cap on what may be produced:
-the real rule is `prompt + max_new_tokens <= max_seq_len`.
-
-⚠️ **`max_seq_len` was 8192 and has since been raised — it is not exposed, so it can
-only be bracketed by runs.** On 2026-08-11 a run at `max_new_tokens: 8191` with a
-2,368-token prompt was rejected for exceeding 8192. On 2026-08-12 a run with prompt
-2,376 + `max_new_tokens` 6,928 = **9,304 completed cleanly with no warning.** So the
-served window is now somewhere in **(9304, 262144]** — the upper bound being the node
-schema's ceiling, which matches the doc's 256K.
-
-**This invalidated a guardrail in this repo**, and the failure mode is worth copying
-down: `check_token_budget()` hardcoded 8192 and *refused* the 6,928 configuration as
-impossible. It was valid. A preflight built on a measured constant becomes wrong the
-moment the platform moves, and it fails in the worst direction — blocking good work
-while sounding certain. It now treats 9,304 as a **known-good floor** and warns above
-it rather than refusing, and it says the served limit is unknown.
-
-Everything below about the 8192 ceiling was measured while it held, and the empty
-results it explains were real. Whether a larger window fixes them is **untested** —
-the clip that returns nothing has not been re-run with a budget above 5,822. The prompt is measured, so the ceiling
-is computable:
-
-| `max_frames` | prompt (tokens) | max usable `max_new_tokens` |
+| SOP | mechanism | step 1 on `..._3_pass_E` |
 |---|---|---|
-| 16 | ~1,192 | **7,000** |
-| 32 | ~1,584 | 6,608 |
-| **64** (used here) | **2,368** (platform's own figure) | **5,824** |
-| 128 | ~3,936 | 4,256 |
+| `oring-numbered` | plain action description | PASSED ❌ |
+| `oring-focused` | attention direction + action verbs | PASSED ❌ |
+| `oring-discriminative` | scene-anchored state change | PASSED ❌ |
+| `oring-maximal` | **the 98%-accuracy Direct Query prompt, ported** | PASSED ❌ |
+| `oring-hybrid` | action + state change together | PASSED ❌ |
 
-The two clips that returned nothing needed more reasoning than ~5,800 tokens, and
-**no caller-side setting provides that.** The frames/budget trade-off is not a free
-lever either: dropping to 16 frames buys 1,176 more generation tokens but samples a
-21-second clip every 1.3 s instead of every 0.33 s.
+Two more dropped the declarative mood — one a question, one a conditional, on the
+theory that asserting the action gives the model something to echo. **Neither produced
+a verdict at all**, at 8192 or 16384.
 
-`tva_api.check_token_budget()` computes this client-side and refuses in about a
-second, because the second check above costs the full cold start:
+`oring-maximal` is the one that moves the problem. It is a faithful port of the prompt
+that reportedly scored **98% on these same clips** via Direct Query — scene framing,
+component inventory, attention direction, permissive verbs — and it fails identically
+to the bare three-line SOP. So the gap between 98% and 0-of-6 is **not prompt content**.
+Whatever causes it is structural, and out of a SOP author's reach.
 
-```
-** prompt (~2368 tokens at max_frames=64, size=224) + max_new_tokens (8191)
-   exceeds max_seq_len=8192.
-   At max_frames=64, max_new_tokens must be <= 5824. Lower it, or use fewer frames.
-refusing to start a run that cannot fit in the context window.
-```
+#### The SOP's own diction lands in the "observation"
 
-This is also a 32× divergence from the design doc, which motivates its
-preprocessing work with F1-0's **256K** context window (MGA's example measured a
-video at "0.15% of F1-0's 256K window"). Whatever this deployment serves,
-`max_seq_len` is **8192**.
+Each `reason` is a compression of its own SOP's step-1 clause, and the differences
+track the SOPs exactly:
 
-**And the divergence is visible inside the API, not just against the doc.** Sending
-an absurd budget trips the node schema first and it reports its own ceiling:
-
-```
-resolving blueprint: invalid config for 1 node(s):
-  - `fusion`: config validation failed: /max_new_tokens: 999999 is greater than
-    the maximum of 262144
-```
-
-**262144 is exactly 256 K** — the window the doc advertises, and what the schema was
-evidently written for. So three layers disagree:
-
-| layer | limit | fires |
-|---|---|---|
-| node schema | `max_new_tokens ≤ 262144` (256 K) | blueprint resolution, ~1 s |
-| graph instantiation | `max_new_tokens < max_seq_len` | after whisper, ~45 s |
-| Newton request prep | `prompt + max_new_tokens ≤ max_seq_len` | after fusion, ~7 min |
-
-The schema permits 256 K, the engine serves 8192, and it is the served value that
-governs every empty result here. Note the ordering when probing: a value above
-262144 never reaches the layer that reports `max_seq_len`, so use something between
-8192 and 262144 — 16384 is the natural choice, being the newest blueprint's own
-default.
-
-⚠️ **The rules tightened mid-session.** Nine clips ran at `max_new_tokens: 8192`
-between 23:37 and 02:47 and produced output; at 03:58 the same value was rejected
-at graph instantiation, and 8191 then failed at fusion time. Same pinned
-blueprint — the node schema and the request-preparation check changed underneath.
-The scripts default to **5120**, comfortably inside the 5,824 ceiling.
-
-Combined with the false passes above: **the clips that exhaust the context are the
-same clips that contain the most defects.** Difficulty, reasoning length and defect
-count all move together, so the failures cluster precisely where a verification
-agent is supposed to earn its keep — and the fix is not available to the caller.
-
-⚠️ **`max_new_tokens: 8192` was accepted during this sweep and is rejected now.**
-Nine clips ran at 8192 between 23:37 and 02:47; a run at 03:58 died at graph
-instantiation on the `must be below max_seq_len` check, on the same pinned
-blueprint. The node schema changed underneath, not the blueprint. The scripts
-default to **8191**.
-
-#### Neither lever works, because they all draw on the same 8192 tokens
-
-Two mitigations were tried on a clip that had produced a false `PASSED`. **Both
-returned zero rows**, and neither carried the reasoning-block WARN — the parser
-simply matched nothing, silently, after ~1000 s of GPU each:
-
-| attempt | changed | result |
-|---|---|---|
-| stricter SOP | added per-step evidence requirements | **0 rows**, no WARN |
-| higher resolution | `size` 224 → 448, frames 64 → 32 | **0 rows**, no WARN |
-
-The arithmetic explains why this was close to unavoidable:
-
-| run | size | frames | asked | prompt | generation actually available |
-|---|---|---|---|---|---|
-| the 9 that produced verdicts | 224 | 64 | 8192 | 2,368 | **5,824** |
-| stricter SOP | 224 | 64 | 5120 | 2,462 | 5,120 |
-| higher resolution | 448 | 32 | 4096 | 3,936 | 4,096 |
-
-**The nine successful runs asked for more than the window and got everything left
-over — 5,824 tokens.** Every mitigation reduces that number: a longer SOP adds
-prompt tokens, and raising `size` adds them quadratically. So the two things you
-would naturally try to fix the blind spot both **starve the reasoning that produces
-the verdicts at all.**
-
-Note this is not deterministic — one clip did return verdicts at 5,120 — so budget
-alone does not predict failure; clip difficulty interacts with it. But the
-direction is clear, and it means **`size` cannot currently be evaluated as a fix**:
-at `size: 448` the ceiling leaves 4,192 generation tokens, well under what the
-working runs used.
-
-#### Buying budget with frames does not work either, and the pattern is not simple
-
-The remaining caller-side lever is to cut `max_frames`, freeing prompt tokens for
-reasoning. Tested three ways on the clip that keeps failing, each at the largest
-budget its frame count allows:
-
-| frames | budget | rehearsed rows | what the model did |
-|---|---|---|---|
-| 64 | 5752 | **21** | formed the answer **seven times** — looping — then lost it all |
-| 32 | 6536 | **0** | never produced a verdict row at all |
-| 16 | 6928 | **3** | formed the answer **once, cleanly, no loop** — and still lost it |
-
-**All three returned nothing**, so the lever does not work. But the pattern is
-non-monotonic and it refutes the simple explanation. An earlier version of this
-section said fewer frames make the model "stop converging", on the strength of the
-32-frame run alone. The 16-frame run shows the opposite: it converged *better* than
-any other configuration — one clean block of three verdicts, no repetition — and was
-still discarded because `</think>` never arrived.
-
-Two things follow, and the second is more useful than the first:
-
-- **The repetition tracks frame count.** Seven blocks at 64 frames, one at 16. Whatever
-  drives the loop, more visual input makes it worse. That is worth knowing because the
-  loop is what consumes the budget.
-- **Even a single clean answer is not enough to escape.** The 16-frame run needed only
-  a closing tag. It had spent 6,928 tokens, formed the correct three-row answer, and
-  the harness threw it away. **No budget or frame setting reachable from a bundle
-  produced output on this clip** — which makes the case for emitting rehearsed rows
-  with a `truncated` marker much stronger than the case for any tuning.
-
-| lever | outcome |
+| the SOP writes | the reason writes |
 |---|---|
-| raise `max_new_tokens` | capped at ~5,822 by the window — ~70 tokens of slack at 64 frames |
-| cut frames to free budget | 21 → 0 → 3 rehearsed rows; **empty every time** |
-| raise `size` for detail | costs budget quadratically — tested, empty |
-| change the SOP wording | bare format gives 0 rehearsed; a stricter one returns nothing |
+| the **small black rubber** O-ring (`focused`) | "the O-ring" |
+| the **black** O-ring (`maximal`, the only SOP phrased this way) | "the **black** O-ring" |
+| "attaches, places, or aligns" (`hybrid`) | "**attaches** it to" — the first verb offered |
+| "**leaves the cluster** of spare O-rings" (`discriminative`) | "picking up a black O-ring **from the cluster**" |
 
-The fixes are all platform-side: `max_model_len` (documented, unwired),
-`repetition_penalty` or `stop` (unexposed), or emitting the rehearsed rows instead of
-discarding them.
+Change one adjective in the SOP and that adjective appears in the model's account of
+what it saw. An unplanned controlled experiment, and a tidier one than anything here was
+designed to be: the only varied input is diction, and the diction lands in the field
+that is supposed to describe the video.
 
-#### One infrastructure failure, reported as a completed job
+> **`reason` is a restatement of what was asked, in the asker's vocabulary — not a
+> report of what was seen.** It cannot be used as evidence or as a confidence signal.
 
-`1_fail_2_pass_3_pass_F` never ran:
+The frames settle it. For the interval TVA itself reported for step 1 (2.7–5.5 s), the
+cluster of spare O-rings sits in **pixel-identical positions** while the worker goes
+straight from picking up the cap to threading it —
+[`reference/oring-never-fitted-1_fail_2_pass_3_pass_E/`](reference/oring-never-fitted-1_fail_2_pass_3_pass_E).
+The described action does not occur, and the model supplied a confident timestamp for it.
 
-```
-ERROR  skipping video "1_fail_2_pass_3_pass_F.mp4": downloading video "s3://…" failed
-       …
-       job.completed  Job completed in 440s
-```
+#### What it actually checks is OBJECT PRESENCE, not performance
 
-`job.completed`, an ERROR row, and no results — so a caller reading the job verdict
-sees success. Worth distinguishing carefully when harvesting: "no results" means
-either *not finished yet* or *finished and produced nothing*, and conflating them
-tells you to keep waiting for a run that is already over. `--collect` reads the log
-and says which:
-
-```
-agt_6yb49ws6…  FAILED     no results, and it will not produce any:
-    skipping video "1_fail_2_pass_3_pass_F.mp4": downloading video "s3://…" failed
-```
-
-The failure looks transient — a download, not a bad input — so a retry is the right
-response. It is a `1_fail` clip, which is why the o-ring finding rests on 5 usable
-clips rather than 6.
-
-#### What this example does and does not establish
-
-Establishes, on 11 scored clips of one task:
-
-- the mechanics end to end, including the runtime SOP path
-- **an asymmetric, reproducible blind spot** — 0/6 on the small part, 3/3 on the
-  tool, across four independent takes of the same omission
-- that the `reason` field is **indistinguishable** between a real observation and
-  an invented one — the same sentence, the same *"clearly shows"* — so it cannot
-  serve as an audit trail or a confidence signal
-- that the reasoning budget fails on the hardest inputs, and drops verdicts it
-  had already formed
-
-Does **not** establish: accuracy on other tasks, on longer videos, on
-attempted-but-botched steps (`FAILED` never fired), or with a different SOP
-wording. One task, one operator, one camera angle. **Treat 0/6 as a red flag worth
-reproducing, not as a measured error rate.**
-
-## Reproducing the empty-output failure
-
-The failure most worth recognising is the one that looks like success:
-`job.completed`, no ERROR row, and no verdicts. `run_tva_example.py` reproduces it
-and reports each symptom as CONFIRMED or NOT REPRODUCED.
-
-**Offline — instant, no API key, no GPU:**
-
-```sh
-python3 run_tva_example.py --repro-empty --offline
-```
-
-**Live — ~13 minutes:**
-
-```sh
-python3 run_tva_example.py --repro-empty
-```
+One rule accounts for every result. It was found by writing a SOP whose step 3 asks for
+*"thread sealant from a tube"* — a prop that exists in no clip — and running it on a
+clip where all three real steps are performed:
 
 ```
-  clip            1_fail_2_pass_3_fail_A.mp4
-                  steps 1 AND 3 skipped — no o-ring, no wrench
-  max_new_tokens  5760   <-- the MAXIMUM the context window allows
-
-  READ THIS: the budget is already as high as it can go. There is no caller-side
-  setting that fixes this run — a larger budget is rejected, and raising `size` or
-  `max_frames` makes it worse by taking tokens from the same window.
+step 0  PASSED   The worker picks up the O-ring and places it onto the blue cap.
+step 1  PASSED   The worker screws the blue cap into the manifold port by hand.
+step 2  MISSING  No thread sealant tube is shown or used in the video.
 ```
 
-**The budget is deliberately at its ceiling.** An earlier version of this mode
-pinned `max_new_tokens: 2048` to force the failure. That reproduced it, but taught
-the wrong lesson — that raising the budget is the fix. **It is not.** The two clips
-that returned empty in the sweep were already at the ceiling: they asked for 8192,
-and the engine gave them everything left after the prompt. This mode reproduces
-*that*, and its log is the most revealing line in the example:
+It refused the step whose object was absent, with a correct reason. So it *does* compare
+the description against the frames:
 
-```
-WARN  … generation ended inside the model's reasoning block (no `</think>`),
-      so it never produced an answer; DROPPING 37 REHEARSED ROW(S).
-```
-
-**Thirty-seven candidate verdicts existed and were discarded.** The answer was
-formed; the window ran out before it could be closed.
-
-#### The repetition expands to fill whatever budget you give it
-
-This is the finding that closes the tuning question. The same clip, same SOP, only the
-budget varying:
-
-| `max_new_tokens` | blocks rehearsed | rows | closed `</think>`? |
+| step | is the object in the scene? | performed? | verdict |
 |---|---|---|---|
-| 5,752 | 7 | **21** | no |
-| 8,192 | ~12 | **37** | no |
+| the wrench, on `*_3_fail` clips | **absent from every frame** | no | `MISSING` ✅ 3 of 3 |
+| the sealant tube | **absent — no such prop exists** | no | `MISSING` ✅ |
+| the o-ring, on `1_fail_*` clips | **PRESENT**, in the spares cluster | no | `PASSED` ❌ 0 of 6 |
 
-**More room produced more repetition, not an answer.** And the 37 reproduced exactly
-across two runs a day apart, on different blueprint versions — so it is deterministic,
-not variance.
+**The question it answers reliably is "is this thing in the video at all?" — not "did
+the worker do this with it?"** When the object is present, the action is assumed. The
+O-rings are laid out on the mat in every clip, so that check passes every time. Across
+both sweeps and every configuration, **TVA has never once reported the o-ring as not
+fitted.**
 
-That is why every tuning avenue failed, and it reframes the platform's own advice.
-`max_seq_len` was raised at some point on 2026-08-12 — a total of 10,568 is now
-accepted where 8,192 was the ceiling the day before — and **it did not help**, because
-the model does not run out of room so much as consume whatever room exists.
+That also explains the variant that should have worked: `oring-discriminative` asked for
+a ring *leaving the cluster* — but the cluster is right there, satisfying a presence
+check with the very object the step was written to discriminate against.
 
-| lever | result |
-|---|---|
-| raise `max_new_tokens` | more repetition, still no answer |
-| the raised `max_seq_len` | same, for the same reason |
-| cut `max_frames` to free budget | tested at 32 and 16 — never helped, and at 16 it broke a clip that had answered |
-| raise `size` | costs budget quadratically — tested, empty |
-| change the SOP wording | bare gives 0 rehearsed rows; stricter returns nothing |
+The empty results fit the same story. All four non-answers in the paired sweep were
+`1_fail` clips (`C(6,4)/C(12,4)` = 15/495 ≈ **3%** by chance), and the failure mode is
+the budget consumed inside `<think>`. The clips that give the model a contradiction are
+the clips where it reasons until the budget is gone — **emptiness and the false pass are
+two outcomes of one conflict.**
 
-So the WARN's *"Raise `max_new_tokens` if the reasoning was truncated"* is misleading
-in this deployment: the reasoning is not truncated for want of space, it is filling the
-space. The levers that would actually address it — `repetition_penalty` and `stop` —
-are not exposed on this blueprint, though MGA's superseded blueprint wired both. And
-failing that, **emitting the rehearsed rows with a `truncated` marker would return a
-usable answer**: on this clip the verdicts were formed twelve times over and discarded.
+> **TVA detects missing tools and missing parts. It does not detect a missing assembly
+> step when the part is sitting on the table.**
 
-#### `dropping N rehearsed row(s)` is the diagnostic to read
+For incoming-QA work that is close to backwards: the parts are always laid out, so the
+omissions a reviewer most needs caught are exactly the ones in the blind spot, while the
+ones it catches — a tool absent from the whole recording — are the easiest for a human
+to notice unaided.
 
-That number is the most useful thing the platform exposes about an empty result, and
-nothing points you at it. It distinguishes two failures that look identical from
-outside:
+## Lessons learned (as of 2026-08-12)
 
-| N | what happened | does a bigger budget help? |
+What 40-odd runs across 12 clips, 8 SOP variants, 4 blueprint versions and 5 budgets
+actually settled — and what they did not.
+
+### 1. It verifies object presence, not performance
+
+The blind spot is asymmetric and reproducible: **0 of 6** on an omitted o-ring, **3 of
+3** on an omitted wrench, **1 of 1** on a prop that exists in no clip. The difference is
+not size or salience — it is whether the object is *on screen at all*. When it is, the
+action is assumed. Since a workstation has its parts laid out by definition, the
+omissions a QA reviewer most needs caught are the ones in the blind spot.
+
+### 2. `reason` is a restatement of the SOP, not a report of the video
+
+Change one adjective in a step and the adjective appears in the model's "observation."
+The frames for one false pass show the parts never moving during the interval TVA
+itself cited. **A confident reason is not evidence that the model looked**, so it cannot
+serve as an audit trail — which is the feature that makes TVA look trustworthy.
+
+### 3. The SOP is not the lever, and the prompt is not the gap
+
+Seven SOPs — plain, attention-directed, scene-anchored, interrogative, conditional, and
+a faithful port of a prompt that scored 98% on these clips via Direct Query — produced
+either the identical wrong verdict or no verdict at all. **Whatever separates 98% from
+0-of-6 is structural**, and unreachable from a SOP.
+
+### 4. Bigger budgets do not buy answers
+
+The window was never the constraint: the served `max_seq_len` is **≥ 18,754** and the
+blueprint defaults to 16,384. Yet raising 5760 → 8192 turned a correct answer into no
+answer, and 8192 → 16384 changed nothing at all. The model **expands its reasoning to
+fill whatever room it is given** — one run rehearsed the verdict block ~12 times inside
+`<think>` and lost all of it.
+
+So the platform's own advice — *"Raise `max_new_tokens` if the reasoning was
+truncated"* — pointed the wrong way in every case measured here. Read the
+`dropping N rehearsed row(s)` count instead:
+
+| N | what happened | what to do |
 |---|---|---|
-| **> 0** | the model **formed** the verdicts inside `<think>` and they were thrown away when `</think>` never arrived | the answer already existed — recoverable in principle without any extra budget |
-| **0** | the model never produced a single verdict row within the budget | plausibly yes — it never got there |
+| `dropping 37` | verdict block emitted ~12× — repetition | **lower** the budget |
+| `dropping 3` | drafted once, cut at `</think>` | budget is not the lever |
+| `dropping 0` | never converged | budget is not the lever |
 
-Observed across the empty results here: **37**, **21**, **0**, **0**. And two of the
-nine empties carried no WARN at all, which is a *third* mode — the parser matched
-nothing — where the budget is not implicated.
-
-**The clearest case shows the repetition is self-defeating.** The same clip at the
-same 5752 budget, on two blueprints that produce byte-identical output on an easy
-clip:
-
-| | rows | `</think>` | rehearsed |
-|---|---|---|---|
-| pinned blueprint | **emitted 21** | closed | — |
-| canonical blueprint | **0** | never reached | **21 dropped** |
-
-Identical content — seven blocks of three verdicts — and the only difference is
-whether the budget lasted long enough to close the block. Those seven blocks cost
-roughly **900 tokens of pure repetition**, which is what exhausted the budget in the
-first place. So the WARN's advice to *"raise `max_new_tokens`"* treats the symptom:
-**the reasoning is long because it repeats, and the repetition consumes the budget
-that would let it finish.**
-
-Two consequences for anyone tuning this:
-
-- **Read the WARN before raising the budget.** `N > 0` means the answer was formed
-  and discarded; more budget is not obviously the fix. No WARN at all means the
-  budget is not implicated.
-- **At `max_frames: 64` there is nothing left to raise** — 5752 is already ~99% of
-  the 8192 window once the prompt is subtracted. Real headroom requires fewer frames
-  (16 frames buys ~1,176 tokens, ~20%), which trades away the visual evidence the
-  verdicts depend on.
-
-
-
-The clip is what makes it fail, not the setting: this one has **both** step 1 and
-step 3 skipped, and the model reasons far longer about absences than about a clean
-pass. An all-correct clip fits easily and will not reproduce it. That asymmetry is
-the deployment risk stated as a reproduction — **the runs that fail are the ones
-containing defects.**
-
-The avoidable variant is still available for contrast, and says so when you use it:
+`run_tva_example.py --repro-empty` reproduces it and reports each symptom as CONFIRMED
+or NOT REPRODUCED, offline or live:
 
 ```sh
-python3 run_tva_example.py --repro-empty --max-new-tokens 2048   # NOTE: avoidable version
+python3 run_tva_example.py --repro-empty --offline   # instant, no API key, no GPU
+python3 run_tva_example.py --repro-empty             # live, ~20 min
 ```
 
-If the default does not reproduce, that is expected variance rather than a broken
-script — reasoning length is not perfectly predictable. Lower `--max-new-tokens`
-and it will, but note that you have then reproduced the fixable failure rather than
-the structural one.
+### 5. The failures cluster on the inputs that matter
 
-## The SOP format decides whether you get an answer at all
+Empty results are not random. All four non-answers in the paired sweep were `1_fail`
+clips — `C(6,4)/C(12,4)` ≈ 3% by chance — because a clip containing a contradiction is
+one the model reasons about until the budget is gone. **Emptiness and the false pass are
+two faces of one conflict**, and both land only on defect-bearing inputs. Any accuracy
+figure gathered without checking for empty results measures the easy half of the set.
 
-A controlled 2×2: same blueprint, same clips, `max_frames: 64`, `size: 224`, and
-**`max_new_tokens` pinned to 5752** so the SOP format is the only variable. Each
-cell was run more than once and reproduced **byte-identically** — the digests below
-are stable, not one-off observations.
+### 6. Nothing about a broken run looks broken
 
-| | `sop/oring-numbered.txt`<br>(`Step 1:` prefixes) | `sop/oring.txt`<br>(bare, the doc's format) |
-|---|---|---|
-| **`1_pass_2_pass_3_pass_A`**<br>all steps performed | 3 rows · **3/3 correct**<br>md5 `ed8116176e6e` | 3 rows · **3/3 correct**<br>md5 `c592168b5c58` |
-| **`1_fail_2_pass_3_fail_A`**<br>steps 1 and 3 skipped | 21 rows · **3/3 correct**<br>md5 `3ef2d7fb07d8` | **0 rows · no verdicts**<br>md5 `d131e7a67a85` |
+`status: ready`, HTTP `202`, `running` → `completed`, and `results: []`. No error field.
+A 3-step SOP can return 21 rows and the pipeline will not notice, though it built the
+instruction from the step count. **`/logs` is the only place the truth appears.**
 
-**On the clip that contains defects, the SOP format decides whether there is any
-output.** The two formats differ only in a `Step N:` prefix on each line. The
-prefixed one — which *duplicates* the `[index]` the pipeline adds, and is therefore
-the format the doc implies you should not use — is the one that answers correctly.
-The bare format the doc's example shows returns nothing.
+### 7. A preflight built on a measured constant goes stale in the worst direction
 
-The easy clip cannot see this at all: both formats score 3/3 there. **A smoke test
-on a clean recording would have concluded the formats are equivalent.**
+Two guardrails here refused valid work. `check_sink()` encoded a denylist of blueprint
+versions from evidence about one of them, and blocked the canonical blueprint for
+eighteen hours after it had been fixed — found only by a deliberate `--force` run.
+`check_token_budget()` hardcoded `max_seq_len: 8192` and rejected a 6,928-token
+configuration as impossible; it was valid, and the real window turned out to be more
+than twice that.
 
-Outputs for all four cells are committed under
-[`reference/grid-5752/`](reference/grid-5752), so the digests are checkable offline:
+Both failed by **sounding certain while blocking good work**, which is worse than
+letting a bad run through — a bad run costs 18 minutes and teaches you something. Both
+are now floors and warnings rather than refusals, and both say the served limit is
+unknown. A third instance was self-inflicted: a *computed* default derived from that
+constant silently moved when the constant was corrected. Fixed values do not drift.
 
-```sh
-python3 evaluate.py reference/grid-5752/*.jsonl
-```
+### What this establishes, and what it does not
 
-### Reproducing it
+**Establishes**, on 11 scored clips of one task: the mechanics end to end including the
+runtime SOP path; an asymmetric reproducible blind spot; that `reason` cannot serve as
+evidence; and that the reasoning budget discards verdicts it has already formed.
 
-```sh
-# Pin EVERY value that affects the result, and the blueprint. These commands must
-# not depend on script defaults — two of those defaults changed while this example
-# was being written, and a reproduction that silently follows them is not a
-# reproduction. The md5s are what the committed outputs in reference/grid-5752/ have.
+**Does not establish**: accuracy on other tasks, longer videos, attempted-but-botched
+steps (`FAILED` never fired once), or a different camera angle. One task, one operator,
+one rig. **Treat 0/6 as a red flag worth reproducing, not as a measured error rate.**
 
-BP=blp_6dp7cye17f8qct7a9jbzx6yhfy   # the version whose sink can emit output
-
-# easy clip — both SOPs agree: 3 verdicts, 3/3 correct
-python3 run_tva_example.py --video 1_pass_2_pass_3_pass_A --sop sop/oring-numbered.txt \
-    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
-    --output grid-easy-numbered.jsonl      # 3 rows,  md5 ed8116176e6e…
-python3 run_tva_example.py --video 1_pass_2_pass_3_pass_A --sop sop/oring.txt \
-    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
-    --output grid-easy-plain.jsonl         # 3 rows,  md5 c592168b5c58…
-
-# defect-bearing clip — the SOPs disagree completely
-python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A --sop sop/oring-numbered.txt \
-    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
-    --output grid-hard-numbered.jsonl      # 21 rows, md5 3ef2d7fb07d8…  3/3 correct
-python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A --sop sop/oring.txt \
-    --blueprint $BP --max-frames 64 --size 224 --max-new-tokens 5752 \
-    --output grid-hard-plain.jsonl         # 0 rows,  md5 d131e7a67a85…  NO VERDICTS
-
-python3 evaluate.py grid-*.jsonl
-```
-
-**Why each pin is there, since none of them is decoration:**
-
-| pin | without it |
-|---|---|
-| `--blueprint` | follows `BLUEPRINT_DEFAULT`, which this repo will flip to the key `tva` once the sink is fixed — and `tva` currently cannot emit output at all |
-| `--max-new-tokens 5752` | computed from SOP length, so the shorter bare SOP gets 5758 and the format is no longer the only variable |
-| `--max-frames 64`, `--size 224` | script defaults today, but they set the visual token count, which changes the prompt and therefore the generation |
-| `--output` | two cells share a clip and the default name is derived from it, so the second run silently overwrites the first |
-
-**Where 5752 comes from:** it is `8192 − 1568 visual − 731 system − 77 SOP − 64 margin`,
-the largest budget that fits beside the *longer* (numbered) SOP. It is pinned rather
-than computed so both cells get the same number, and because it is what the committed
-digests were produced with. Those 6 tokens are provably immaterial — 5752 and 5758
-give byte-identical output on the easy clip — so the pin is about comparability, not
-correctness.
-
-**Run them one at a time, or check for the skip message.** All four inputs must
-already be on the platform with identical bytes, or a re-upload will destroy a
-queued run's input — see
-[the upload note](#platform-behavior-worth-knowing). Each run should print
-`identical object already on the platform — skipping upload` twice; if one says
-`uploading`, let it finish before starting the next.
-
-### What this does not explain
-
-Two things are established here and one is not:
-
-- **Established:** which configurations produce output, reproducibly.
-- **Established:** why 21 rows rather than 3 — the model emits the verdict block
-  seven times (one placeholder block with `reason: "..."`, then the real answer six
-  times, identical), and the parser regex-matches every occurrence without ever
-  comparing the count to the SOP's step count.
-- **NOT established: why the model repeats, or why the bare SOP yields nothing.**
-  The 21-row output used ~918 of 5752 tokens — about 15% — and then stopped on its
-  own, so it is not a runaway that exhausted the budget. And the empty run logged
-  no WARN at all, so it is not the reasoning-block overflow either; the parser
-  simply matched nothing in whatever was generated.
-
-Neither question is answerable through this API: **the raw generation is never
-exposed**, and `temperature`, `repetition_penalty` and `stop` are not wired on this
-blueprint. `parser_compute_stats: true` would at least report template conformance
-on the empty case, and is the next diagnostic worth running.
+**Not settled** — `size`. It was tried once, at 448 with frames dropped to 32 to fit the
+window, and returned **no verdicts at all**, so it is untested as a *fix* rather than
+untried. That is the trap: raising `size` costs visual tokens quadratically, so it
+starves the generation that produces the verdicts. The frames also argue against
+resolution being the cause — the ring is never in the worker's hands, so there is no
+small object to resolve — but it has not been ruled out.
 
 ## Platform behavior worth knowing
 
-- **The `/agents` API is dev-only.** Prod 404s on every `/agents` path; a prod key
-  on dev returns 401. Two different symptoms for the same class of mistake.
-- **A blueprint can be republished under you, mid-session, and the new version can
-  be broken.** See the warning at the top: `tva` changed id and sink format at
-  22:01:18 while runs were in flight, and the new canonical version cannot emit
-  output. **Read the blueprint document before every run** — by key or by id, the
-  identifier alone tells you nothing about whether the graph will instantiate.
-- **The graph is validated after the models are loaded, not before.** A blueprint
-  that cannot instantiate still costs the full ~7-minute cold start. Validating
-  connectors and node configs first would turn 996 s into about 1 s.
-- **`connectors.source[].id` wants the file BASENAME.** `/v0.5/files` returns both
-  a `file_id` (the basename) and a `file_uid` (`fil_…`); the connector wants the
-  former. The uid fails at source resolution, after the pod has started.
-- **Uploads enforce the DECLARED MIME type**, not the bytes. `text/plain` for the
-  SOP and `video/mp4` for the clip. A `.mp4` declared as `text/csv` is rejected.
+### Things that will cost you a run
+
 - **`file_id` IS the basename, so re-uploading DESTROYS an in-flight run's input.**
-  This cost three runs here before the mechanism was clear, and the timeline is
-  unambiguous:
+  This cost three runs before the mechanism was clear: a run pins the object at
+  *input-resolution* time, dev queues runs for up to an hour, and any re-upload of the
+  same name in that window is fatal to whatever is already queued. It surfaces minutes
+  later as `S3 object not found` — with `job.completed` on the job. All three uploads
+  were byte-identical; the content never changed, only the object behind the name.
 
-  ```
-  run  resolved   pinned SOP object   killed by
-  A    05:51:25   f7307e1d…           B's upload of the same oring.txt at 05:53:45
-  B    05:53:45   c1f2ab91…           C's upload of the same oring.txt at 06:00:46
-  C    06:00:46   (current)           nothing after it — the only survivor
-  ```
+  **The fix is not to rename** but to **not re-upload what is already there.**
+  `tva_api.upload_file()` compares local bytes against
+  `GET /v0.5/files/download/{file_id}` and skips when they match. `iterate_sop.py` and
+  the default upload path go further and derive ids from *both* the clip and the SOP,
+  so two variants cannot collide at all.
+- **`connectors.source[].id` wants the file BASENAME.** `/v0.5/files` returns both a
+  `file_id` (the basename) and a `file_uid` (`fil_…`); the connector wants the former.
+  The uid fails at source resolution, after the pod has started.
+- **Uploads enforce the DECLARED MIME type**, not the bytes. `text/plain` for the SOP,
+  `video/mp4` for the clip. A `.mp4` declared as `text/csv` is rejected.
+- **A blueprint can be republished under you mid-session, and the new version can be
+  broken.** On 2026-08-11 at 22:01 `tva` changed id AND sink format while runs were in
+  flight, to a format with no registered connector; every run against canonical died at
+  graph instantiation for ~18 hours. **Read the blueprint document before every run** —
+  the identifier alone tells you nothing about whether the graph will instantiate.
+- **The graph is validated AFTER the models load.** A blueprint that cannot instantiate
+  still costs the full ~7-minute cold start. Validating connectors and node configs
+  first would turn 996 s into about 1 s.
 
-  A chain of clobbers, each run destroying its predecessor's input, and **only the
-  last one survives**. All three uploads were byte-identical; the content never
-  changed, only the object behind the name.
+### Things that look like success and are not
 
-  A run pins the object at input-resolution time, not at execution time, and dev
-  queues runs for up to an hour — so any re-upload of the same name in that window
-  is fatal to whatever is already queued. It surfaces minutes later, inside the
-  run, as `S3 object not found`, with `job.completed` on the job.
+Three distinct failures all report `job.completed`, and none sets an error field:
 
-  **The fix is not to rename**, which would sacrifice readable filenames; it is to
-  **not re-upload what is already there.** `tva_api.upload_file()` compares the
-  local bytes against `GET /v0.5/files/download/{file_id}` and skips the upload
-  when they match, warning when they differ. That makes running two clips
-  concurrently over one SOP safe, which the plain-name scheme otherwise is not.
+| what happened | how it looks | how to tell |
+|---|---|---|
+| reasoning overflowed | `results: []`, one WARN | count the verdicts |
+| the video never downloaded | `results: []`, an ERROR row | read `/logs` for ERROR |
+| the parser matched nothing | `results: []`, **no WARN at all** | absence of both |
+
+- **So `/logs` is the only place the truth appears.** The bundle returns
+  `status: ready`, the run returns `202`, the instance `status` says `running` then
+  `completed`, and `/results` is simply empty. A 44-byte empty result is committed as
+  [`reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json`](reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json).
+- **The instance `status` field is not a terminality signal.** MGA saw `running` persist
+  20+ minutes after a pod died with exit=1.
 - **`is_valid: true` is not proof the object landed.** It is returned alongside a
   `file_id` regardless, so read the file back before spending a run.
-- **The bundle endpoint is plural.** `POST /agents/bundle` → 404; use
-  `/agents/bundles`. The RED and OSM example repos still use the singular form.
-- **Starting a run returns 202, not 201.**
-- **Poll `/logs`, not `/events`.** `/events` carries only "run started" and
-  "dispatched to JOS".
-- **The instance `status` field is not a terminality signal** — judge from the log
-  stream. (MGA saw `running` persist 20+ minutes after a pod died with exit=1.)
-- **`job.admitted`'s queue figure is not the real wait, and the real wait can be
-  invisible.** One run reported `Job scheduled after 32s in queue` and then did
-  not start a pod for **11+ minutes**, with no job of ours holding the GPU and the
-  instance `status` reading `running` throughout. `GET /agents/instances` is
-  scoped to your org, so a job from another org can block you with nothing in your
-  view to explain it. Judge progress from `job.started` and expect blind spots.
 - **Values are accepted whether or not they do anything.** A key absent from the
-  blueprint's `values`, or present but never referenced as `${values.<key>}`, is
-  stored on the bundle and silently ignored.
-- **A run can report `job.completed` and return nothing.** `max_new_tokens: 2048`
-  on a clip with a skipped step produced `{"id":…,"results":[]}` — 44 bytes, no
-  ERROR row, only a WARN. **Count the verdicts; neither the status nor the exit
-  code distinguishes it from success.** Committed as
-  [`reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl`](reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl).
-- **The reasoning block shares the output budget**, so the tokens a run needs
-  depend on how hard the judgement is — and the clips containing a defect need
-  more than the clean ones.
-- **A run can log an ERROR and still report `job.completed`.** One clip failed to
-  download from S3 and never ran; the job reported completed after 440 s with an
-  ERROR row and no results. Judge from the ERROR row, not the verdict.
-- **Runs are not admitted, or executed, in submission order.** Twelve runs
-  submitted together sat **~60 minutes with none admitted**, then completed out of
-  order over ~90 minutes. Admission is capacity-gated, not a formality, so
-  submitting a batch up front does not reserve an order — only that the work
-  eventually happens.
-- **No progress events during processing.** Between `input_started` and the
-  terminal event there is nothing — no frame count, no transcript length, no
-  per-node timing.
-- **whisper loads even with no audio track**, costing ~40 s per run and
+  blueprint's `values`, or present but never referenced as `${values.<key>}`, is stored
+  on the bundle and silently ignored.
+
+### Queue and timing
+
+- **`job.admitted`'s queue figure is not the real wait, and the real wait can be
+  invisible.** One run reported `Job scheduled after 32s in queue` and then did not
+  start a pod for **11+ minutes**, with no job of ours holding the GPU. `GET
+  /agents/instances` is scoped to your org, so another org's job can block you with
+  nothing in your view to explain it. **Judge progress from `job.started`.**
+- **Runs are not admitted, or executed, in submission order.** Twelve submitted together
+  sat ~60 minutes with none admitted, then completed out of order over ~90 minutes.
+  Submitting a batch up front does not reserve an order.
+- **No progress events during processing.** Between `input_started` and the terminal
+  event there is nothing — no frame count, no transcript length, no per-node timing.
+- **whisper loads even with no audio track**, costing ~40 s of every run and
   contributing nothing.
+
+### API shape
+
+- **The `/agents` API is dev-only.** Prod 404s on every `/agents` path; a prod key on
+  dev returns 401. Two symptoms for the same class of mistake.
+- **The bundle endpoint is plural.** `POST /agents/bundle` → 404. The RED and OSM
+  example repos still use the singular form.
+- **Starting a run returns 202, not 201.**
+- **Poll `/logs`, not `/events`.** `/events` carries only "run started" and "dispatched
+  to JOS".
 
 ## Where the deployment diverges from the design doc
 
@@ -1489,23 +927,23 @@ Observations for the author, not defects.
   | `min_temporal_similarity_threshold` | ❌ |
 
   **`max_model_len` is `max_seq_len`.** The doc specifies it, describes the
-  input-and-output sharing exactly as observed, and the blueprint does not expose
-  it — so the 8192 ceiling behind every empty result here is a documented,
-  intended parameter that a caller cannot reach. At the doc's stated 256K it would
-  not bind at all; this deployment serves **8192**, 32× smaller.
+  input-and-output sharing exactly as observed, and the blueprint does not expose it.
+  The served value is not readable through the API either — it can only be bracketed
+  by runs, and it moved twice during this work. Measured at **≥ 18,754**, still well
+  under the doc's stated 256K.
 
-  This is not an unanticipated bug. The doc predicts it:
-
-  > *"even moderate videos can easily overflow the model's context window if not
-  > sampled efficiently"*
+  Worth being careful about the causal claim here, because an earlier version of this
+  section got it wrong. The doc predicts context overflow —
 
   > *"using the raw video frames will result in the model context overflowing for
   > even short videos"*
 
-  The whole preprocessing design — linear downsampling, 224×224 resizing, temporal
-  compression — exists to fit inside `max_model_len`. So the empty outputs are the
-  failure mode the algorithm was designed to prevent, occurring because the
-  governing parameter is unreachable.
+  — and the whole preprocessing design exists to fit inside `max_model_len`. But the
+  empty outputs here are **not** that failure. Doubling the budget to the blueprint's
+  own 16,384 default changed nothing: the model expands its reasoning to fill whatever
+  room it is given (see [Lesson 4](#4-bigger-budgets-do-not-buy-answers)). So
+  `max_model_len` being unreachable is a real gap in the API surface, but it is not
+  what causes the empty results.
 
   `min_temporal_similarity_threshold` is the other consequential omission: the doc
   devotes its longest section to the temporal compression it controls — four
@@ -1521,105 +959,122 @@ Observations for the author, not defects.
 - **`MISSING` rows are specified to carry no timestamps** and the doc's own format
   agrees (`step N: MISSING, reason: <reason>` has no timestamp fields) — worth
   stating in the output schema, since consumers must handle nulls. Observed
-  consistently: every `MISSING` row has null timestamps, and **42 of 42 genuine
-  `PASSED` rows carry an interval.** That regularity is useful — a `PASSED` row
-  *without* an interval is not a verdict but the placeholder artifact the model
-  emits when it loops, so `evaluate.py` flags those as SUSPECT rather than scoring
-  them.
+  consistently across every output committed here: **35 of 35 `MISSING` rows have null
+  timestamps, and 98 of 100 `PASSED` rows carry an interval.** The two exceptions are
+  exactly the predicted artefact — placeholder rows with `reason: "..."` that the model
+  emits when it loops — so a `PASSED` row *without* an interval is not a verdict, and
+  `evaluate.py` flags those as SUSPECT rather than scoring them.
 - **The model is fp8** — `f1_0_35b_a3b_fp8_base_040625b4d0750b`, confirming the
   35B/3B-active MoE description and adding quantization the doc does not mention.
 
 ## Recommendations
 
-0. **Investigate the small-part blind spot before anyone deploys this as a gate.**
-   0 of 6 detections on an omitted o-ring, with fluent invented descriptions of it
-   being fitted, against 3 of 3 on an omitted wrench. `size: 224` is the obvious
-   suspect — a ~10 mm ring is a handful of pixels — so exposing `size`, or a
-   region-of-interest crop, is the first thing worth testing. This is a
+Ordered by value, and every one of them is backed by a run in this repo.
+
+1. **Investigate the blind spot before anyone deploys this as a gate.** 0 of 6
+   detections on an omitted o-ring, with fluent invented descriptions of it being
+   fitted, against 3 of 3 on an omitted wrench and 1 of 1 on a prop that appears in no
+   clip. The pattern is **object presence, not part size**: when the object is on screen
+   the action is assumed, and a workstation always has its parts laid out. `size: 224`
+   was the obvious suspect and is probably not the cause — the ring is never in the
+   worker's hands, so there is no small object to resolve. It is also barely testable as
+   things stand: the one run at 448 had to drop to 32 frames to fit the window and
+   returned no verdicts, because visual tokens grow quadratically with `size`. **A
+   region-of-interest crop would test the hypothesis without that trade-off.** This is a
    correctness issue, not a configuration one.
-1. **Fix the sink format on the canonical `tva` blueprint** — `json/per-request`
-   has no registered connector, so the blueprint that ships cannot emit output.
-   Highest priority: it makes the agent unusable via its own key.
-2. **Validate the graph before loading models, not after.** A blueprint that
-   cannot instantiate currently costs the full ~7-minute cold start; connector and
-   node-config validation up front turns 996 s into about 1 s.
-3. **Validate the output's arity against the SOP, and expose `repetition_penalty`
-   and `stop`.** A 3-step SOP returned 21 rows. The pipeline knows the step count —
-   `PrepareSOPNode` built the instruction from it — and the parser never compares
-   the two, so a self-evidently wrong result passes through as data. The model loops: one run re-emitted the same 3-verdict block
-   six extra times (~788 tokens, 14% of its budget), and the same clip at a higher
-   budget looped ~12 times inside `<think>` and produced nothing. That makes
-   repetition the likely cause of the empty results rather than a cosmetic quirk,
-   and both levers were demonstrably wireable — MGA's superseded blueprint carried
-   them. No SOP wording can substitute, because the SOP governs what is judged and
+2. **Do not discard rehearsed rows on an unterminated reasoning block.** One run dropped
+   **37 candidate verdict rows** because `</think>` never arrived inside the budget;
+   others dropped 21 and 3. The answer had been formed. Emitting those rows with a
+   `truncated: true` marker would turn a total loss into a usable, flagged result — the
+   cheapest fix on this list, and it would have recovered four of the empty results here.
+3. **Validate the output's arity against the SOP, and expose `repetition_penalty` and
+   `stop`.** A 3-step SOP returned 21 rows. `PrepareSOPNode` built the instruction from
+   the step count and the parser never compares the two, so a self-evidently wrong
+   result passes through as data. The model loops — one run re-emitted the same
+   3-verdict block six extra times, another ~12 times inside `<think>` and produced
+   nothing — which makes repetition the likely cause of the empty results rather than a
+   cosmetic quirk. Both levers were demonstrably wireable: MGA's superseded blueprint
+   carried them. No SOP wording substitutes, because the SOP governs what is judged and
    not when generation stops.
-4. **Do not discard rehearsed rows on an unterminated reasoning block.** One run
-   dropped **37 candidate verdict rows** because `</think>` never arrived inside
-   the budget. The answer had been formed; emitting those rows with a
-   `truncated: true` marker would turn a total loss into a usable, flagged result.
-5. **Treat an empty `results` list as a failure, not a completed job.** The parser
+4. **Treat an empty `results` list as a failure, not a completed job.** The parser
    already emits a WARN naming the cause; promoting it to ERROR, or surfacing a
-   `rows_emitted: 0` field, would stop a silent empty result reading as success.
-   This matters more for TVA than for MGA because the overflow correlates with the
-   inputs that contain defects.
-6. **Expose `max_model_len` — the doc already specifies it.** Not a feature
-   request: the design doc's fusion-parameter list defines `max_model_len` as the
-   context window "which includes input and output tokens", and the blueprint does
-   not wire it. At 8192 total, with ~1,600 spent on a
-   64-frame prompt, a hard clip cannot fit its reasoning and there is nothing the
-   caller can do — 8191 is the maximum accepted `max_new_tokens` and fewer frames
-   buys little. The design doc describes a 256K context; this deployment serves
-   8192. Failing that, reserve tokens for the answer so truncated reasoning still
-   yields verdicts.
-6. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section
-   is the temporal compression algorithm, with a documented 70% compression and
-   25% performance gain, and none of it is reachable from a bundle.
-7. **Document that `step` is 0-based** in the output schema. Human-authored SOPs
-   are 1-based, and the mismatch fails quietly.
-8. **Emit progress events during processing.** Between `input_started` and the
-   terminal event there is nothing across 5–6 minutes, so neither a failure nor
-   the time spent can be attributed.
-9. **Reconsider loading whisper when the video has no audio track.** It costs ~40 s
-   of every run here and contributes nothing.
+   `rows_emitted: 0` field, would stop a silent empty result reading as success. This
+   matters more for TVA than for MGA because the failure correlates with the inputs that
+   contain defects.
+5. **Fix the WARN's advice, which points the wrong way.** It says *"Raise
+   `max_new_tokens` if the reasoning was truncated."* Measured here: raising 5760 → 8192
+   turned a correct answer into no answer, and 8192 → 16384 changed nothing at all. The
+   reasoning is not truncated for want of space, it expands to fill the space. The
+   `dropping N` count already distinguishes the cases — say so in the message.
+6. **Validate the graph before loading models, not after.** A blueprint that cannot
+   instantiate currently costs the full ~7-minute cold start; connector and node-config
+   validation up front turns 996 s into about 1 s.
+7. **Expose `max_model_len` — the doc already specifies it.** Not a feature request: the
+   design doc's fusion-parameter list defines it as the context window "which includes
+   input and output tokens", and the blueprint does not wire it. It is also not readable
+   through the API, so a caller can only bracket it by runs, and it moved twice during
+   this work — measured at ≥ 18,754 against the doc's stated 256K. It is not what causes
+   the empty results, but a caller cannot currently reason about its own budget.
+8. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section is
+   the temporal compression algorithm, with a documented 70% compression and 25%
+   performance gain, and none of it is reachable from a bundle.
+9. **Document that `step` is 0-based** in the output schema. Human-authored SOPs are
+   1-based, and the mismatch fails quietly — a perfect run reads as 2-of-3.
+10. **Emit progress events during processing.** Between `input_started` and the terminal
+    event there is nothing across 5–6 minutes, so neither a failure nor the time spent
+    can be attributed.
+11. **Reconsider loading whisper when the video has no audio track.** It costs ~40 s of
+    every run here and contributes nothing.
 
 ## Repo layout
 
 | Path | What it is |
 |---|---|
-| `run_tva_example.py` | **Start here.** Single-clip end-to-end run: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--repro-empty` reproduces the empty-output failure and reports each symptom as CONFIRMED / NOT REPRODUCED. `--dry-run`, `--show` and `--repro-empty --offline` need no key. |
-| `sop/oring.txt` | The SOP, one bare step per line, matching the doc's example instruction. Edit this to change the procedure — no Python involved. |
-| `sop/oring-numbered.txt` | The `Step N:` variant that produced every committed result, kept for provenance. Its prefixes duplicate the automatic `[index]`. |
-| `sop/oring-strict.txt` | A stricter variant that returns ZERO rows — kept as the worked example of an SOP competing with the system message. |
-| `sop/paired/` | One SOP per clip, named `<clip-stem>.txt`, for the stem-matching the pipeline uses to pair a video with its procedure. Derived from `oring-numbered.txt`; `regenerate.py --check` catches drift. |
-| `sweep.py` | Batch path over many clips, reusing one bundle. Sequential by default so a misconfiguration costs one run, not twelve; `--submit-all` instead claims every queue slot up front. `--collect` harvests finished runs after a disconnect and `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
+| `run_tva_example.py` | **Start here.** One clip end to end: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--dry-run`, `--show` and `--repro-empty --offline` need no API key. |
+| `iterate_sop.py` | **SOP iteration.** Derives the platform file ids from both the clip and the SOP (`<clip>-<sop>.mp4` + `.txt`), so variants cannot overwrite each other and an id says which SOP produced it. `--compare` scores every collected variant offline. |
+| `sweep.py` | Batch over many clips, one bundle. `--submit-all` claims queue slots up front, `--fresh` re-runs what is already on disk, `--collect` harvests after a disconnect, `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
-| `tva_api.py` | Shared stdlib client (streaming upload, retries, `/logs` polling, wired-value preflight). |
-| `reference/` | Committed run outputs, the extracted design-doc figures, and a blueprint snapshot, so every number here is checkable offline with no API key. Includes the 44-byte empty results, kept as evidence because they are the failure worth recognising. |
-| `reference/grid-5752/` | The four outputs of the SOP-format 2×2, at a pinned budget. `python3 evaluate.py reference/grid-5752/*.jsonl` reproduces the table above. |
-| `docs/` | The TVA design doc this example implements (gitignored — internal). |
+| `tva_api.py` | Shared stdlib client — streaming upload, idempotent re-upload, `/logs` polling, wired-value and token preflight. |
+| `sop/oring-numbered.txt` | **The baseline SOP**, and the default for every script. One step per line. |
+| `sop/oring.txt` | The same steps without `Step N:` prefixes — the design doc's bare format, kept for the 2×2 comparison. |
+| `sop/oring-strict.txt` | Adds status instructions and returns **zero rows** — the worked example of an SOP competing with the parser. |
+| `sop/oring-{focused,discriminative,maximal,hybrid}.txt` | The four wording variants behind the null result. Each carries its own rationale as `#` comments, which are stripped before upload. |
+| `sop/oring-{question,conditional}.txt` | The two non-assertive variants. Neither produced a verdict at any budget. |
+| `sop/oring-sealant.txt` | Step 3 asks for a prop that exists in no clip. The run that established **object presence, not performance**. |
+| `sop/paired/` | One SOP per clip for `--pair-sop`'s stem matching. `regenerate.py --check` catches drift from `oring-numbered.txt`. |
+| `data/clips/` | The twelve clips, committed — 80 MB, no LFS. Ground truth is in each filename. |
+| `reference/` | **Every number in this README is scored from here, offline.** `sweep/` the 12-clip run · `grid-5752/` the SOP-format 2×2 · `strict-sop/` and `size-448/` the two mitigations that returned nothing · `oring-never-fitted-…/` the frames proving a false pass is fabricated · plus the 44-byte empty result and a blueprint snapshot. |
+| `eval_paired/` | The stem-paired 12-clip sweep — the second run of the baseline. |
+| `eval_iter/` | One result per SOP variant, `<clip>-<sop>_f<frames>_t<budget>.json`. `iterate_sop.py --compare` reproduces the null-result table. |
+| `eval_out/` | Where `sweep.py` writes by default. Gitignored — regenerable. |
+| `docs/` | The TVA design doc this example implements. **Gitignored — internal.** |
 
 ## Not yet built
 
-- **An audio-bearing clip.** The whisper half of the pipeline is loaded on every
-  run and exercised by none of these.
-- **A `size` sweep, now the most valuable experiment here** — promoted because the
-  SOP route has been tried and failed. The blind spot is most likely a resolution
-  problem: at `size: 224` a ~10 mm ring is a few pixels. `size` is exposed and
-  honoured, and `null` keeps the source resolution, so this is one bundle value
-  away from being tested.
-- **A `parser_compute_stats: true` run on the strict SOP**, to confirm that the
-  zero-row result is template non-conformance rather than something else. One run,
-  and it is what the value exists for.
-- **A clip with a step attempted and done WRONG.** `FAILED` never fired across 12
-  clips because every failure here is an omission, so that third status is
-  completely unexercised.
-- **A `max_frames` sweep.** 64 vs the blueprint's 16 is the obvious first
-  comparison on 21–43 s clips, and `sweep.py --max-frames 16` runs it.
-- **Timestamp scoring.** Would need per-step ground-truth intervals, which the
-  filename labels cannot carry. The reasons are more informative per GPU-minute.
-- **Longer videos.** Every clip here is under 45 s. MGA fails outright above ~5
-  minutes; where TVA's ceiling sits is untested, and the design doc says
-  performance is known to degrade past 10 minutes.
-- **A negative-control SOP.** Feeding a procedure the video does not show at all
-  would test whether TVA can say MISSING for everything, rather than pattern-match
-  the SOP onto whatever is on screen. Cheap and worth doing.
+Roughly in order of what would teach us most per GPU-minute.
+
+- **A clip with the O-ring pile OFF CAMERA.** The sharpest test of the object-presence
+  rule, and it needs one new recording rather than a new run: the rule predicts `MISSING`
+  on step 1 for the first time. If it still passes, the rule is wrong and the finding
+  needs restating.
+- **A clip with a step attempted and done WRONG.** `FAILED` never fired once across 12
+  clips, because every failure here is an omission — so a third of the status vocabulary
+  is completely unexercised, and "attempted but incorrect" is the case a real QA gate
+  cares most about.
+- **A fully negative-control SOP** — all three steps describing actions the video never
+  shows. The single-step version of this is done and produced the central finding
+  (`sop/oring-sealant.txt`, step 3 correctly `MISSING`), but whether TVA can reject an
+  entire procedure, or starts pattern-matching onto whatever is on screen, is untried.
+- **An audio-bearing clip.** whisper loads on every run and is exercised by none of
+  these, so half the fusion is untested here.
+- **A region-of-interest crop, or `size: 336`.** 448 was tried once and returned nothing
+  — frames had to drop to 32 to fit, which starves generation. A crop tests the
+  resolution hypothesis without paying quadratically for it.
+- **A `parser_compute_stats: true` run on the strict SOP**, to confirm the zero-row
+  result is template non-conformance rather than something else. One run, and it is what
+  the value exists for.
+- **Longer videos.** Every clip here is under 45 s. MGA fails outright above ~5 minutes;
+  where TVA's ceiling sits is untested, and the design doc says performance degrades
+  past 10 minutes.
+- **Timestamp scoring.** Would need per-step ground-truth intervals, which the filename
+  labels cannot carry. The reasons are more informative per GPU-minute.

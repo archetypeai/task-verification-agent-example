@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run TVA across several labelled clips, one at a time, and save each output.
 
-A single run is ~13 minutes of job time (754-814 s observed) and dev has ONE GPU
+A single run is ~13 minutes of job time (754-1614 s observed) and dev has ONE GPU
 that serializes jobs, so this is deliberately sequential: submitting concurrently
 produces queue waits rather than parallelism — 796 s observed for one clip that
 queued behind another. Twelve clips is therefore 2.5-3 hours of wall clock. Budget
@@ -19,9 +19,9 @@ much lower than the first.
     python3 sweep.py --all                      # every clip in data/clips
     python3 sweep.py --all --max-frames 16      # the blueprint default, for contrast
 
-Outputs land in eval_out/ as one JSONL per clip, then:
+Outputs land in eval_out/ as one JSON file per clip, then:
 
-    python3 evaluate.py eval_out/*.jsonl
+    python3 evaluate.py eval_out/tva-output-*.json
 
 WHY A SEPARATE SCRIPT from run_tva_example.py: that one is the readable
 end-to-end path for a single clip and prints everything. This one is the batch
@@ -42,7 +42,8 @@ import time
 
 import tva_api as api
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
-                            parse_ground_truth, resolve_clip, sop_text, upload_sop)
+                            pair_names, parse_ground_truth, resolve_clip, sop_text,
+                            upload_sop)
 
 OUT_DIR = "eval_out"
 
@@ -52,20 +53,37 @@ def label_str(clip: str) -> str:
     return "/".join(f"{k}={'pass' if v else 'FAIL'}" for k, v in sorted(truth.items()))
 
 
-def sop_id_for(args, stem: str, steps: list[str], shared: str | None) -> str:
-    """The SOP file id to send for one clip.
+def upload_pair(args, path: str, stem: str, steps: list[str],
+                shared: str | None) -> tuple[str, str]:
+    """Upload one clip's video and SOP, returning (video_id, sop_id).
 
-    `shared` is the single upload used when not pairing. In pairing mode it is None
-    and each clip gets its own <stem>.txt — which is why this must be one function
-    used by BOTH run paths. It was duplicated in the sequential loop only, so
+    ONE function used by BOTH run paths — the sequential loop and --submit-all. An
+    earlier version had the pairing logic in the sequential loop only, so
     --submit-all sent `id: null` and the API rejected the run with a 422.
+
+    Naming matches run_tva_example.py via pair_names(), so the two scripts cannot
+    disagree about what a run's inputs are called:
+
+      default      <clip>-<sop>.mp4 + <clip>-<sop>.txt   stems match AND name the SOP
+      --pair-sop   <clip>.mp4       + <clip>.txt         the platform team's form
+      shared       <clip>.mp4       + <sop>.txt          one SOP object for the sweep
+
+    `shared` is only used for the third case, which is what a 1:1 run can get away
+    with: the unpaired 12-clip sweep in reference/sweep/ returned verdicts for 10 of
+    12 clips with mismatched stems.
     """
     if shared is not None:
-        return shared
-    paired = os.path.join("sop", "paired", f"{stem}.txt")
-    if os.path.exists(paired) and open(paired).read() == sop_text(steps):
-        return api.upload_file(paired)
-    return api.upload_text(sop_text(steps), f"{stem}.txt")
+        return api.upload_file(path), shared
+    v_name, s_name = pair_names(stem, args.sop, args.pair_sop,
+                                os.path.basename(path))
+    if args.pair_sop:
+        video_id = api.upload_file(path)
+        committed = os.path.join("sop", "paired", f"{stem}.txt")
+        if os.path.exists(committed) and open(committed).read() == sop_text(steps):
+            return video_id, api.upload_file(committed)
+        return video_id, api.upload_text(sop_text(steps), s_name)
+    return (api.upload_file(path, rename=v_name),
+            api.upload_text(sop_text(steps), s_name))
 
 
 def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
@@ -85,13 +103,13 @@ def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
     pending = []
     for i, path in enumerate(clips, 1):
         stem = os.path.splitext(os.path.basename(path))[0]
-        out_path = os.path.join(args.out_dir, f"tva-output-{stem}.jsonl")
-        if os.path.exists(out_path):
-            print(f"[{i}/{len(clips)}] {stem} — already have {out_path}, skipping")
+        out_path = os.path.join(args.out_dir, f"tva-output-{stem}.json")
+        if os.path.exists(out_path) and not args.fresh:
+            print(f"[{i}/{len(clips)}] {stem} — already have {out_path}, skipping "
+                  f"(--fresh to re-run)")
             continue
-        video_id = api.upload_file(path)
-        agent_id = api.run(bundle_id, video_id,
-                           sop_id_for(args, stem, steps, sop_id))
+        video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id)
+        agent_id = api.run(bundle_id, video_id, clip_sop_id)
         print(f"[{i}/{len(clips)}] submitted {stem:<32s} {agent_id}")
         pending.append((stem, agent_id, out_path))
 
@@ -114,7 +132,7 @@ def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
                     "steps": n})
     with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as fh:
         json.dump(log, fh, indent=2)
-    print(f"\nscore it:  python3 evaluate.py {args.out_dir}/*.jsonl")
+    print(f"\nscore it:  python3 evaluate.py {args.out_dir}/tva-output-*.json")
 
 
 def collect(out_dir: str, bundle_id: str | None = None,
@@ -178,13 +196,13 @@ def collect(out_dir: str, bundle_id: str | None = None,
                 print(f"  {aid}  {status:9}  still in flight, no results yet")
             continue
         inner = items[0].get("data") or {}
-        # The output filename carries the clip: agt_<id>__output_<clip>.jsonl
+        # The output filename carries the clip: agt_<id>__output_<clip>.json
         name = str(inner.get("filename") or "")
         # The platform names outputs "<agent>__output_<clip>.json" — .json, not
-        # .jsonl, despite the content being JSONL. Strip whatever extension is
-        # there rather than one specific suffix, or you get "<clip>.json.jsonl".
+        # a different extension than you expect. Strip whatever extension is
+        # there rather than one specific suffix, or you get "<clip>.json.json".
         stem = os.path.splitext(name.split("__output_", 1)[-1])[0] or aid
-        out_path = os.path.join(out_dir, f"tva-output-{stem}.jsonl")
+        out_path = os.path.join(out_dir, f"tva-output-{stem}.json")
         if os.path.exists(out_path):
             skipped += 1
             continue
@@ -205,7 +223,7 @@ def collect(out_dir: str, bundle_id: str | None = None,
           + (f", EMPTY {empty} (reasoning overflow — see the README)" if empty else "")
           + (f", FAILED {dead} (never will produce output)" if dead else ""))
     if saved or skipped:
-        print(f"score it:  python3 evaluate.py {out_dir}/*.jsonl")
+        print(f"score it:  python3 evaluate.py {out_dir}/tva-output-*.json")
 
 
 def cancel_all() -> None:
@@ -245,9 +263,11 @@ def main() -> None:
                          "resolution (null) is unreachable: 1080p costs ~3600 "
                          "tokens per step.")
     ap.add_argument("--max-new-tokens", type=int, default=None,
-                    help="output budget (default 8192). At 2048 a clip with a "
-                         "skipped step exhausted the budget inside the model's "
-                         "<think> block and returned results:[] — see the README.")
+                    help=f"output budget (default {api.DEFAULT_MAX_NEW_TOKENS}). "
+                         "BIGGER IS NOT BETTER: the failure mode is repetition, and "
+                         "on the double-omission clip 8192 returned results:[] where "
+                         "5760 returned correct verdicts. At 2048 the budget is "
+                         "exhausted inside the <think> block — see the README.")
     ap.add_argument("--out-dir", default=OUT_DIR)
     ap.add_argument("--submit-all", action="store_true",
                     help="submit every run UP FRONT, then collect results, "
@@ -257,6 +277,21 @@ def main() -> None:
                          "cannot slip in between your clips. The cost: a "
                          "misconfiguration burns every run instead of the first, "
                          "and this example has hit two such failures already.")
+    ap.add_argument("--fresh", action="store_true",
+                    help="re-run every clip, REPLACING any output already on disk. "
+                         "Without this, --all skips them — which is what makes an "
+                         "interrupted sweep resumable, and why a fresh clone of this "
+                         "repo runs nothing (the twelve outputs are committed). "
+                         "Deliberately NOT --force: that flag already exists in "
+                         "run_tva_example.py meaning 'override the sink guardrail', "
+                         "and one name for two behaviours across sibling scripts is a "
+                         "trap.")
+    ap.add_argument("--shared-sop", action="store_true",
+                    help="upload ONE SOP object for the whole sweep, named after the "
+                         "SOP file. Cheapest — no per-clip video copies — but stems do "
+                         "not match and the platform cannot later tell you which SOP a "
+                         "run used. This was the old default and is how "
+                         "reference/sweep/ was produced.")
     ap.add_argument("--pair-sop", action="store_true",
                     help="upload one SOP per clip named <clip-stem>.txt, from "
                          "sop/paired/ when present. The pipeline pairs video and "
@@ -281,6 +316,14 @@ def main() -> None:
                          "escape hatch after --submit-all, since an abandoned run "
                          "blocks the shared GPU.")
     args = ap.parse_args()
+
+    # --fresh REPLACES outputs, and reference/ holds the committed evidence every
+    # number in the README is scored from. Losing it costs 2.6 h of shared GPU to
+    # regenerate, and the regenerated runs would not be the ones the README cites.
+    if args.fresh and os.path.normpath(args.out_dir).split(os.sep)[0] == "reference":
+        sys.exit(f"refusing --fresh into {args.out_dir}: reference/ is committed "
+                 f"evidence, not a scratch directory.\n"
+                 f"  use a new directory instead:  --out-dir eval_rerun")
 
     if args.collect:
         collect(args.out_dir, args.bundle)
@@ -331,15 +374,15 @@ def main() -> None:
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
-    # Default to the MAXIMUM the context window allows, computed from the actual
-    # frames/size — not a guessed constant. See api.max_usable_new_tokens().
+    # Default to a budget that has actually PRODUCED ANSWERS, not to the ceiling.
+    # See api.DEFAULT_MAX_NEW_TOKENS for why the ceiling is the wrong default.
     if args.max_new_tokens is None:
-        args.max_new_tokens = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
-        print(f"max_new_tokens not set -> using {args.max_new_tokens}: "
-              f"{api.MAX_SEQ_LEN_KNOWN_GOOD} (largest total OBSERVED to work) "
-              f"- ~{api.estimate_prompt_tokens(args.max_frames, args.size, args.sop)} prompt - 64 margin.\n"
-              f"  The served max_seq_len is not exposed and was raised at least once, "
-              f"so a larger value may well work — pass --max-new-tokens to try.")
+        ceiling = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
+        args.max_new_tokens = min(api.DEFAULT_MAX_NEW_TOKENS, ceiling)
+        print(f"max_new_tokens not set -> using {args.max_new_tokens} "
+              f"(the ceiling here is {ceiling}; a bigger budget is more room to "
+              f"LOOP, not to reason — see api.DEFAULT_MAX_NEW_TOKENS).\n"
+              f"  Pass --max-new-tokens {ceiling} to use the whole window instead.")
     values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
               "size": args.size}
 
@@ -349,19 +392,34 @@ def main() -> None:
         todo, done = [], []
         for path in clips:
             stem = os.path.splitext(os.path.basename(path))[0]
-            out = os.path.join(args.out_dir, f"tva-output-{stem}.jsonl")
-            (done if os.path.exists(out) else todo).append(stem)
+            out = os.path.join(args.out_dir, f"tva-output-{stem}.json")
+            (todo if args.fresh or not os.path.exists(out)
+             else done).append(stem)
         print(f"blueprint  {args.blueprint}")
         print(f"values     {json.dumps(values)}")
-        print(f"SOP        {args.sop} ({len(steps)} steps), uploaded as "
-              f"{os.path.basename(args.sop)}")
+        # Show the ACTUAL ids for a representative clip, not a guess: the naming
+        # differs per mode, and a --dry-run that prints the wrong name is worse than
+        # one that prints nothing.
+        sample = os.path.splitext(os.path.basename((todo or done or ["<clip>"])[0]))[0]
+        if args.shared_sop:
+            sample_v, sample_s = f"{sample}.mp4", os.path.basename(args.sop)
+        else:
+            sample_v, sample_s = pair_names(sample, args.sop, args.pair_sop)
+        print(f"SOP        {args.sop} ({len(steps)} steps)")
+        print(f"inputs     {sample_v} + {sample_s}"
+              f"{'   <- stems match' if sample_v.rsplit('.',1)[0] == sample_s.rsplit('.',1)[0] else '   <- stems DIFFER'}")
         print(f"bundle     ONE, reused for all runs")
-        print(f"outputs    {args.out_dir}/tva-output-<clip>.jsonl")
+        print(f"outputs    {args.out_dir}/tva-output-<clip>.json")
         if done:
             print(f"\nalready done, would be SKIPPED ({len(done)}):")
             for stem in done:
                 print(f"  {stem:<32s} {label_str(stem)}")
-        print(f"\nwould run ({len(todo)}), sequentially, ~13 min each "
+        # --submit-all changes WHEN runs are submitted, not how fast they execute:
+        # dev serializes on one GPU either way. Say which mode, so the plan does not
+        # read as "sequential" when the flag was passed, but do not imply parallelism.
+        mode = ("all submitted up front, then collected in order — still ONE AT A "
+                "TIME on the GPU" if args.submit_all else "submitted one at a time")
+        print(f"\nwould run ({len(todo)}), {mode}, ~13 min each "
               f"-> ~{len(todo) * 13} min (~{len(todo) * 13 / 60:.1f} h):")
         for i, stem in enumerate(todo, 1):
             print(f"  {i:2}. {stem:<32s} {label_str(stem)}")
@@ -388,11 +446,20 @@ def main() -> None:
     # One upload for the whole sweep: every clip is checked against the SAME
     # procedure, so the SOP is uploaded once and its file_id reused.
     sop_id = None
-    if args.pair_sop:
-        print(f"pairing mode: one SOP per clip, named <clip-stem>.txt")
-    else:
+    if args.shared_sop:
+        # One SOP object for the whole sweep. Cheapest, and stems do NOT match — fine
+        # for 1:1 runs (reference/sweep/ was made this way), but it means the platform
+        # cannot tell you afterwards which SOP a given run was given.
         sop_id = upload_sop(args.sop, steps)
-        print(f"SOP uploaded as {sop_id} (shared by every clip)")
+        print(f"SOP uploaded as {sop_id} (ONE object shared by all clips; "
+              f"stems do NOT match)")
+    elif args.pair_sop:
+        print("pairing mode: one SOP per clip, named <clip-stem>.txt "
+              "(every SOP variant collides on this name)")
+    else:
+        print("default: one pair per clip, named <clip-stem>-"
+              f"{os.path.splitext(os.path.basename(args.sop))[0]}.{{mp4,txt}} "
+              "— stems match and record the SOP")
 
     # ONE bundle for the whole sweep, reused by every run.
     #
@@ -415,18 +482,17 @@ def main() -> None:
     log = []
     for i, path in enumerate(clips, 1):
         stem = os.path.splitext(os.path.basename(path))[0]
-        out_path = os.path.join(args.out_dir, f"tva-output-{stem}.jsonl")
-        if os.path.exists(out_path):
+        out_path = os.path.join(args.out_dir, f"tva-output-{stem}.json")
+        if os.path.exists(out_path) and not args.fresh:
             print(f"[{i}/{len(clips)}] {stem} — already have "
-                  f"{out_path}, skipping")
+                  f"{out_path}, skipping (--fresh to re-run)")
             continue
         print(f"[{i}/{len(clips)}] {stem}  ({label_str(stem)})")
         t0 = time.time()
         agent_id = None
         try:
-            video_id = api.upload_file(path)
-            agent_id = api.run(bundle["id"], video_id,
-                               sop_id_for(args, stem, steps, sop_id))
+            video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id)
+            agent_id = api.run(bundle["id"], video_id, clip_sop_id)
             print(f"  agent_id={agent_id}")
             verdict = api.poll_logs(agent_id, quiet=True)
             payload = api.fetch_results(agent_id, out_path)
@@ -454,7 +520,7 @@ def main() -> None:
     with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as fh:
         json.dump(log, fh, indent=2)
     print(f"\nwrote {args.out_dir}/sweep-log.json")
-    print(f"score it:  python3 evaluate.py {args.out_dir}/*.jsonl")
+    print(f"score it:  python3 evaluate.py {args.out_dir}/tva-output-*.json")
 
 
 if __name__ == "__main__":

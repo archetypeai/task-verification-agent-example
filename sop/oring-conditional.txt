@@ -1,0 +1,12 @@
+# Ports the Direct Query prompt's GRAMMATICAL MOOD, which every previous variant
+# missed. Ours all asserted the action ("The worker picks up the O-ring and places
+# it onto the cap") — a declarative statement that it happened, which the model then
+# echoed back as its own observation. This one asserts nothing: it poses a condition
+# and asks for a decision, exactly as the 98% prompt does.
+#
+# Vocabulary is TVA's (PASSED/MISSING), not Direct Query's (PASS/FAIL), because the
+# parser matches PASSED|FAILED|MISSING — instructing PASS risks the model emitting a
+# token the parser drops, which is a plausible cause of the 0-row oring-strict run.
+Step 1: If the worker attaches, places, or aligns the black O-ring onto the blue cap, report PASSED. Otherwise report MISSING.
+Step 2: If the worker attaches, inserts, or aligns the blue cap into a port of the black manifold by hand, report PASSED. Otherwise report MISSING.
+Step 3: If the worker uses a wrench to tighten the blue cap, report PASSED. Otherwise report MISSING.
