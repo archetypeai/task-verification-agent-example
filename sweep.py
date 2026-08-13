@@ -54,7 +54,7 @@ def label_str(clip: str) -> str:
 
 
 def upload_pair(args, path: str, stem: str, steps: list[str],
-                shared: str | None) -> tuple[str, str]:
+                shared: str | None, suffix: str | None = None) -> tuple[str, str]:
     """Upload one clip's video and SOP, returning (video_id, sop_id).
 
     ONE function used by BOTH run paths — the sequential loop and --submit-all. An
@@ -75,7 +75,7 @@ def upload_pair(args, path: str, stem: str, steps: list[str],
     if shared is not None:
         return api.upload_file(path), shared
     v_name, s_name = pair_names(stem, args.sop, args.pair_sop,
-                                os.path.basename(path))
+                                os.path.basename(path), suffix=suffix)
     if args.pair_sop:
         video_id = api.upload_file(path)
         committed = os.path.join("sop", "paired", f"{stem}.txt")
@@ -108,7 +108,8 @@ def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
             print(f"[{i}/{len(clips)}] {stem} — already have {out_path}, skipping "
                   f"(--fresh to re-run)")
             continue
-        video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id)
+        video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id,
+                                            suffix=args._suffix)
         agent_id = api.run(bundle_id, video_id, clip_sop_id)
         print(f"[{i}/{len(clips)}] submitted {stem:<32s} {agent_id}")
         pending.append((stem, agent_id, out_path))
@@ -288,10 +289,12 @@ def main() -> None:
                          "trap.")
     ap.add_argument("--shared-sop", action="store_true",
                     help="upload ONE SOP object for the whole sweep, named after the "
-                         "SOP file. Cheapest — no per-clip video copies — but stems do "
-                         "not match and the platform cannot later tell you which SOP a "
-                         "run used. This was the old default and is how "
-                         "reference/sweep/ was produced.")
+                         "SOP file, with PLAIN ids and no uniqueness tail. Cheapest — "
+                         "the idempotent skip fires so no video is re-uploaded — but "
+                         "stems do not match, the platform cannot later tell you which "
+                         "SOP a run used, and a concurrent user writes to the same ids "
+                         "and can destroy your queued runs. SOLO USE ONLY. This was the "
+                         "old default and is how reference/sweep/ was produced.")
     ap.add_argument("--pair-sop", action="store_true",
                     help="upload one SOP per clip named <clip-stem>.txt, from "
                          "sop/paired/ when present. The pipeline pairs video and "
@@ -316,6 +319,11 @@ def main() -> None:
                          "escape hatch after --submit-all, since an abandoned run "
                          "blocks the shared GPU.")
     args = ap.parse_args()
+
+    # ONE suffix for the whole sweep, so every upload from this batch shares it and
+    # `<clip>-<sop>-<this timestamp>` greps as a unit in an org-wide file list. Clip
+    # stems already differ, so per-clip uniqueness is preserved.
+    args._suffix = api.run_suffix()
 
     # --fresh REPLACES outputs, and reference/ holds the committed evidence every
     # number in the README is scored from. Losing it costs 2.6 h of shared GPU to
@@ -404,10 +412,23 @@ def main() -> None:
         if args.shared_sop:
             sample_v, sample_s = f"{sample}.mp4", os.path.basename(args.sop)
         else:
-            sample_v, sample_s = pair_names(sample, args.sop, args.pair_sop)
+            sample_v, sample_s = pair_names(sample, args.sop, args.pair_sop,
+                                            suffix=args._suffix)
         print(f"SOP        {args.sop} ({len(steps)} steps)")
         print(f"inputs     {sample_v} + {sample_s}"
               f"{'   <- stems match' if sample_v.rsplit('.',1)[0] == sample_s.rsplit('.',1)[0] else '   <- stems DIFFER'}")
+        if args.shared_sop:
+            print(f"           ** PLAIN NAMES, no uniqueness tail. Cheap — the "
+                  f"idempotent skip fires, so\n"
+                  f"           ** no video is re-uploaded — but ANOTHER USER running "
+                  f"these clips writes\n"
+                  f"           ** to the same ids and can destroy your queued runs. "
+                  f"Solo use only.")
+        else:
+            print(f"           the -<UTC>-<hex> tail is generated per sweep, so the "
+                  f"REAL run will differ.\n"
+                  f"           It keeps concurrent users from overwriting each "
+                  f"other's inputs.")
         print(f"bundle     ONE, reused for all runs")
         print(f"outputs    {args.out_dir}/tva-output-<clip>.json")
         if done:
@@ -491,7 +512,8 @@ def main() -> None:
         t0 = time.time()
         agent_id = None
         try:
-            video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id)
+            video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id,
+                                                suffix=args._suffix)
             agent_id = api.run(bundle["id"], video_id, clip_sop_id)
             print(f"  agent_id={agent_id}")
             verdict = api.poll_logs(agent_id, quiet=True)

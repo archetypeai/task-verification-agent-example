@@ -402,13 +402,40 @@ A run's inputs arrive as **one flat list of file ids**. Nothing in the payload s
 SOPs the pipeline pairs them **by matching stems** — `X.mp4` with `X.txt`. The console
 and the API share this, because they share the blueprint.
 
-```sh
-python3 run_tva_example.py --video 1_fail_2_pass_3_fail_A.mp4 --pair-sop
-python3 sweep.py --all --pair-sop          # one SOP per clip, stems matched
+**The default naming satisfies that and two other requirements at once:**
+
+```
+1_pass_2_pass_3_pass_A-oring-numbered-20260813T154342Z-2f81.mp4
+1_pass_2_pass_3_pass_A-oring-numbered-20260813T154342Z-2f81.txt
 ```
 
-[`sop/paired/`](sop/paired) holds one copy per clip for exactly this, with a
-`regenerate.py --check` that fails if a copy drifts from its source.
+| part | why |
+|---|---|
+| the clip stem | recognisable in an org-wide file list |
+| the SOP stem | an id says WHICH procedure a run was checked against |
+| `<UTC timestamp>` | sorts and greps; tells you which upload was yours and when |
+| `<4 hex>` | the part that actually guarantees uniqueness — **two people starting in the same second is exactly the case being fixed** |
+
+The last two matter because **this repo is meant to be used by several people at
+once.** An org shares one flat file namespace and `file_id` IS the basename, so
+without them two colleagues running the same clip write to the same object — and a run
+pins its inputs at *input-resolution* time, so the second upload destroys the first's
+queued run. `api.run_suffix()` generates the tail **once per run** (once per *sweep*
+for `sweep.py`, so a whole batch greps as a unit) and both halves of the pair share it,
+because a per-file suffix would break the very pairing it protects.
+
+Two consequences worth knowing:
+
+- **The idempotent-upload skip no longer fires** on the default path, because the name
+  is new every time. That is fine — uniqueness makes the clobber impossible by
+  construction rather than defending against it — but a 12-clip sweep now re-uploads
+  **80 MB** of video. At ~0.8 s per clip against a ~1000 s run, the time cost is noise.
+- **Uploads accumulate.** There is no file-cleanup endpoint in this API (only
+  `/cancel` for instances), so every sweep leaves its objects behind.
+
+`--pair-sop` keeps the clip-stem-only form for reproducing the platform team's literal
+recommendation, plus the same suffix. [`sop/paired/`](sop/paired) holds one copy per
+clip for it, with a `regenerate.py --check` that fails if a copy drifts.
 
 **Tested: for a 1:1 run the filename makes no difference.** The same clip was run
 paired and unpaired at three configurations, and each pair reproduced the other's

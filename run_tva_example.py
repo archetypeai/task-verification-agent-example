@@ -255,19 +255,29 @@ def sop_upload_name(sop_path: str = DEFAULT_SOP_PATH) -> str:
 
 
 def pair_names(clip: str, sop_path: str, pair_sop: bool,
-               video_name: str | None = None) -> tuple[str, str]:
+               video_name: str | None = None,
+               suffix: str | None = None) -> tuple[str, str]:
     """The file ids the video and SOP are uploaded under: (video, sop).
 
     ONE definition, used by both --dry-run and the real upload. They were computed
     separately once and immediately diverged — --dry-run kept printing the previous
     naming scheme after the default changed, which is the worst possible bug in a
     flag whose entire job is to tell you what a run would do.
+
+    `suffix` is api.run_suffix() — `<UTC timestamp>-<4 hex>`, computed once per run.
+    It makes the ids unique across CONCURRENT USERS: an org shares one flat file
+    namespace and `file_id` is the basename, so two people running this example at
+    once would otherwise write to the same names and destroy each other's queued
+    runs. Both halves of the pair get the same suffix, because the pipeline matches
+    them by stem.
     """
+    tail = f"-{suffix}" if suffix else ""
     if pair_sop:
-        # Clip stem only: the platform team's literal recommendation.
-        return (video_name or f"{clip}.mp4"), f"{clip}.txt"
+        # Clip stem only: the platform team's literal recommendation, plus the
+        # uniqueness suffix — which preserves stem matching, the point of the flag.
+        return f"{clip}{tail}.mp4", f"{clip}{tail}.txt"
     # Default: stems match AND record which SOP produced the run.
-    stem = f"{clip}-{os.path.splitext(os.path.basename(sop_path))[0]}"
+    stem = f"{clip}-{os.path.splitext(os.path.basename(sop_path))[0]}{tail}"
     return f"{stem}.mp4", f"{stem}.txt"
 
 
@@ -591,11 +601,15 @@ def main() -> None:
         print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
         v_name, s_name = pair_names(clip, args.sop, args.pair_sop,
                                     os.path.basename(args.video)
-                                    if os.path.splitext(args.video)[1] else None)
+                                    if os.path.splitext(args.video)[1] else None,
+                                    suffix=api.run_suffix())
         print(json.dumps({"connectors": {"source": [
             {"type": "file", "id": v_name, "format": "mp4"},
             {"type": "file", "id": s_name, "format": "txt"},
         ]}}, indent=2))
+        print(f"\n  the -<UTC>-<hex> tail is generated per run, so the REAL run will "
+              f"differ.\n  It keeps concurrent users from overwriting each other's "
+              f"inputs.")
         print(f"\nthe SOP that would be uploaded ({len(steps)} steps, "
               f"one per line):\n")
         print(sop_text(steps))
@@ -645,8 +659,10 @@ def main() -> None:
 
     print(f"\nuploading {args.video} "
           f"({os.path.getsize(args.video) / 1e6:.1f} MB) ...")
+    # ONE suffix for this run, shared by both inputs.
+    suffix = api.run_suffix()
     v_name, s_name = pair_names(clip, args.sop, args.pair_sop,
-                                os.path.basename(args.video))
+                                os.path.basename(args.video), suffix=suffix)
     if args.pair_sop:
         # The platform team's literal recommendation: name the SOP after the CLIP.
         # Kept so that exact convention can still be reproduced, but not the default:

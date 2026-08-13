@@ -21,6 +21,7 @@ of one thing: **TVA takes a reference procedure at runtime and MGA does not.**
 """
 from __future__ import annotations
 
+import datetime
 import json
 import mimetypes
 import os
@@ -122,6 +123,28 @@ def guess_content_type(path: str) -> str:
     """
     ctype, _ = mimetypes.guess_type(path)
     return ctype or "application/octet-stream"
+
+
+def run_suffix() -> str:
+    """`<UTC timestamp>-<4 hex>`, computed ONCE per run and shared by its inputs.
+
+    `file_id` IS the basename, so an org shares one flat namespace. Two people running
+    this example at the same time would otherwise upload to the same names — and a run
+    pins its inputs at input-resolution time, so the second upload destroys the first's
+    queued run. It surfaces minutes later as `S3 object not found`, inside a run that
+    already started, with `job.completed` on the job.
+
+    Each part earns its place:
+      the original stem  recognisable in an org-wide file list
+      the UTC timestamp  sorts and greps; tells you which upload was yours and when
+      4 hex              the part that actually guarantees it — two people starting in
+                         the same second is precisely the case being fixed
+
+    The video and the SOP MUST share this suffix: the pipeline pairs them by matching
+    stems, so a per-file suffix would break the pairing it exists to protect.
+    """
+    return (datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + "-" + uuid.uuid4().hex[:4])
 
 
 def remote_bytes(file_id: str) -> bytes | None:
