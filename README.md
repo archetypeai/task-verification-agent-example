@@ -398,9 +398,28 @@ status semantics, so an SOP repeating them can only conflict.
 ### Pairing a video with its SOP: matching stems
 
 A run's inputs arrive as **one flat list of file ids**. Nothing in the payload says
-"this text belongs to that video", so when a run carries several videos and several
-SOPs the pipeline pairs them **by matching stems** — `X.mp4` with `X.txt`. The console
-and the API share this, because they share the blueprint.
+"this text belongs to that video", so the pipeline works it out from the names. The
+blueprint documents four cases, and the matching is **substring, not equality** — a
+`<stem>.txt` pairs with any video whose name *contains* `<stem>`:
+
+| you pass | what happens |
+|---|---|
+| **1 video + 1 SOP** | that procedure applies to the video **whether or not the names match** |
+| 1 SOP + N videos | the same procedure applies to every video, stems irrelevant |
+| N SOPs + N videos | each video takes the SOP whose stem it contains; **longest match wins**, with a warning |
+| a video no SOP matches | falls back to `default_text`, and is **skipped** if that is unset |
+
+Two things follow, and the first explains a result further down this page:
+
+- **For the 1:1 runs everything here does, the filenames cannot affect pairing.** A
+  single `.txt` applies to the video regardless of name — which is why a paired and an
+  unpaired run of the same clip reproduced each other's `rehearsed` counts exactly.
+  Stem matching only decides anything when a run carries **several** SOPs.
+- **Substring matching is looser than it looks.** `file-1.txt` pairs with
+  `cam-file-1-run.mp4`, and if two SOP stems both match a video the longer one wins.
+  Short or overlapping stems can therefore mis-pair in a multi-input run. The naming
+  below is immune by accident and by design: every id is long, fully qualified and
+  unique, so no stem is a substring of another.
 
 **The default naming satisfies that and two other requirements at once:**
 
@@ -437,9 +456,9 @@ Two consequences worth knowing:
 recommendation, plus the same suffix. [`sop/paired/`](sop/paired) holds one copy per
 clip for it, with a `regenerate.py --check` that fails if a copy drifts.
 
-**Tested: for a 1:1 run the filename makes no difference.** The same clip was run
-paired and unpaired at three configurations, and each pair reproduced the other's
-distinctive `rehearsed` count exactly:
+**Measured before the mechanism was known, and it agrees with it.** The same clip was
+run paired and unpaired at three configurations, and each pair reproduced the other's
+distinctive `rehearsed` count exactly — which is what the one-SOP rule above predicts:
 
 | config | unpaired | paired with matching stem |
 |---|---|---|
