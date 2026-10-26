@@ -4,8 +4,8 @@
 Shared by run_tva_example.py, sweep.py and inspect_bundle.py. Auth and endpoint
 come from the environment, with a local .env loaded if present:
 
-    ATAI_API_KEY=<dev API key>
-    ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+    ATAI_API_KEY=<API key>
+    ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
 
 Adapted from the MGA example's mga_api.py. The differences are all consequences
 of one thing: **TVA takes a reference procedure at runtime and MGA does not.**
@@ -52,12 +52,18 @@ def api_base() -> str:
     endpoint = os.environ.get("ATAI_API_ENDPOINT", "").rstrip("/")
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (put it in .env)")
-    # A prod endpoint has no /agents API at all — it 404s on every path below,
-    # which reads like a missing blueprint rather than the wrong host. Say so here.
-    if "api.dev" not in endpoint:
-        print(f"  NOTE: {endpoint} is not the dev endpoint. The /agents API is "
-              f"dev-only; prod returns 404 for every agent path.")
     return endpoint
+
+
+def files_root() -> str:
+    """Where the files API and run-output refs resolve.
+
+    The platform.* endpoints (`https://platform[.dev].u1.archetypeai.app/api`)
+    serve files at `<endpoint>/files`; the legacy api.* hosts served them at
+    `<endpoint>/v0.5/files`. /agents is at `<endpoint>/agents` on both.
+    """
+    endpoint = api_base()
+    return endpoint if endpoint.endswith("/api") else f"{endpoint}/v0.5"
 
 
 def require_key() -> str:
@@ -149,13 +155,13 @@ def run_suffix() -> str:
 
 def remote_bytes(file_id: str) -> bytes | None:
     """The object currently stored under `file_id`, or None if absent."""
-    status, payload = request("GET", f"{api_base()}/v0.5/files/download/{file_id}",
+    status, payload = request("GET", f"{files_root()}/files/download/{file_id}",
                               raw=True, allow_status=True)
     return payload if status == 200 and isinstance(payload, bytes) else None
 
 
 def upload_file(path: str, rename: str | None = None, verify: bool = True) -> str:
-    """POST a file to /v0.5/files, streamed from disk. Returns the file_id.
+    """POST a file to the files API, streamed from disk. Returns the file_id.
 
     IDEMPOTENT: if an object with the same name and the same bytes is already on
     the platform, this SKIPS the upload. That is not an optimisation — it prevents
@@ -214,7 +220,7 @@ def upload_file(path: str, rename: str | None = None, verify: bool = True) -> st
 
     with open(path, "rb") as fh:
         body = _ChainedReader([preamble, fh, epilogue])
-        req = urllib.request.Request(f"{api_base()}/v0.5/files", data=body,
+        req = urllib.request.Request(f"{files_root()}/files", data=body,
                                      method="POST")
         req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
@@ -243,11 +249,11 @@ def upload_file(path: str, rename: str | None = None, verify: bool = True) -> st
         # video, once the SOP text — each discovered only inside a run, ~13 min
         # later, as `S3 object not found`. Fetching the file back is the only
         # check that actually confirms it landed, and it costs one request.
-        status, _ = request("GET", f"{api_base()}/v0.5/files/download/{file_id}",
+        status, _ = request("GET", f"{files_root()}/files/download/{file_id}",
                             raw=True, allow_status=True)
         if status != 200:
             sys.exit(f"upload of {path} reported success but the object is not "
-                     f"retrievable (GET /v0.5/files/download/{file_id} -> "
+                     f"retrievable (GET /files/download/{file_id} -> "
                      f"{status}).\n"
                      f"  This has happened twice here; re-uploading has fixed it. "
                      f"Retry rather than starting a run, which would fail ~13 min "
@@ -612,14 +618,14 @@ def fetch_results(agent_id: str, out_path: str) -> bytes | None:
     if not ref:
         print("  results carried no download ref")
         return None
-    # A run output's ref is a RELATIVE platform path that resolves under /v0.5
+    # A run output's ref is a RELATIVE platform path that resolves under files_root()
     # and needs the bearer token; an absolute ref is presigned S3 and must NOT
     # get the header. Run outputs do not expire, so this is re-fetchable later.
     if ref.startswith("http"):
         with urllib.request.urlopen(ref, timeout=300) as resp:
             payload = resp.read()
     else:
-        payload = request("GET", f"{api_base()}/v0.5{ref}", raw=True)
+        payload = request("GET", f"{files_root()}{ref}", raw=True)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     open(out_path, "wb").write(payload)
     return payload

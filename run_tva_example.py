@@ -4,8 +4,8 @@
 Single file, stdlib only apart from tva_api.py next to it — no pip install, no
 virtualenv, no GPU, no atai_core checkout.
 
-    ATAI_API_KEY=<dev key>
-    ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+    ATAI_API_KEY=<API key>
+    ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
 
     python3 run_tva_example.py                      # the default clip
     python3 run_tva_example.py --video data/clips/1_pass_2_pass_3_fail_A.mp4
@@ -36,7 +36,7 @@ WHAT IS DIFFERENT FROM THE MGA EXAMPLE, and it is the whole point:
 
 THINGS THAT WILL BITE YOU (all verified on dev, 2026-08-11)
 
-  1. `connectors.source[].id` wants the file BASENAME, which is what /v0.5/files
+  1. `connectors.source[].id` wants the file BASENAME, which is what the files API
      returns as `file_id` — not the `fil_...` `file_uid` in the same response.
 
   2. The bundle endpoint is PLURAL: POST /agents/bundles. The singular 404s.
