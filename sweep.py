@@ -447,6 +447,18 @@ def main() -> None:
         return
 
     os.makedirs(args.out_dir, exist_ok=True)
+    # Every clip already done means nothing will run. Say so before creating a
+    # bundle: the likely cause is an out-dir holding results from another
+    # environment or blueprint, which the skip check cannot tell apart.
+    if not args.fresh and all(
+            os.path.exists(os.path.join(
+                args.out_dir,
+                f"tva-output-{os.path.splitext(os.path.basename(p))[0]}.json"))
+            for p in clips):
+        sys.exit(f"nothing to run: all {len(clips)} clip(s) already have an output "
+                 f"in {args.out_dir}/.\n"
+                 f"  To run them again, write elsewhere (--out-dir eval_prod) "
+                 f"or replace them (--fresh).")
     bp = api.get_blueprint(args.blueprint)
     inert = api.inert_values(bp["document"], values)
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
@@ -461,7 +473,8 @@ def main() -> None:
         # start once per clip, which is how 40 GPU-minutes get spent on nothing.
         sys.exit(f"REFUSING TO RUN: {sink_warning}")
     print(f"values: {json.dumps(values)}")
-    print(f"{len(clips)} clip(s), sequential, ~13 min each "
+    mode = "all submitted up front" if args.submit_all else "sequential"
+    print(f"{len(clips)} clip(s), {mode}, ~13 min each "
           f"-> ~{len(clips) * 13} min total, plus queue if the GPU is busy\n")
 
     # One upload for the whole sweep: every clip is checked against the SAME
