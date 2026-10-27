@@ -19,8 +19,8 @@ that was never fitted. [Full results below.](#results--12-clips-and-one-finding-
 > measured on the **dev** platform in August 2026, against the `tva` blueprint as it
 > stood then. The example now targets **prod** (`https://platform.u1.archetypeai.app/api`),
 > whose `tva` blueprint was republished on 2026-10-15 with a different transcriber and
-> new value ranges — see [Running on prod](#running-on-prod). None of the findings has
-> been re-measured there yet.
+> new value ranges — see [Running on prod](#running-on-prod). The 12-clip baseline was
+> re-run there on 2026-10-26: [the o-ring blind spot holds, and a new failure appeared](#results-on-prod--12-clips-2026-10-26).
 
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
@@ -94,7 +94,8 @@ python3 evaluate.py eval_out/tva-output-*.json
 **`--submit-all` holds your place in the queue; it did not run the clips in
 parallel on dev**, which had one GPU and executed jobs one at a time, so the wall
 clock stayed hours either way — the paired 12-clip sweep took ~2.2 h this way against
-a ~2.6 h sequential estimate. Prod's capacity has not been measured here. What it prevents is losing the GPU *between* your
+a ~2.6 h sequential estimate. **Prod ran two jobs at once** on 2026-10-26, and the
+12-clip sweep took 51 min from first pod to last result. What it prevents is losing the GPU *between* your
 clips: submitting one at a time leaves the slot unclaimed after each run, and a job
 from another org can take it. An 11-minute gap between `job.admitted` and a pod
 starting is the clearest case of that we saw.
@@ -180,9 +181,72 @@ example measured: a `<stem>.txt` pairs with every video whose name *contains* `<
 the longest matching stem wins, and a single `.txt` applies to every video.
 
 The preflight reads the blueprint document, so the node renames need no code change,
-and every value this example sends is still wired. **What is unverified on prod:** an
-upload (every read path was checked; a POST was not), a full run, and whether the
-o-ring blind spot survives the new blueprint.
+and every value this example sends is still wired.
+
+### Results on prod — 12 clips, 2026-10-26
+
+Same clips, same SOP (`sop/oring-numbered.txt`), same values (`max_frames: 64`,
+`max_new_tokens: 5760`) as the August baseline. Committed in [`eval_prod/`](eval_prod):
+
+```sh
+python3 evaluate.py eval_prod/tva-output-*.json
+```
+
+```
+clip                         step 1            step 2            step 3
+1_fail_2_pass_3_fail_A    FAIL>PASSED  !!    PASS>PASSED OK    FAIL>MISSING OK
+1_fail_2_pass_3_pass_A    FAIL>MISSING OK    PASS>PASSED OK    PASS>PASSED  OK
+1_fail_2_pass_3_pass_B    FAIL>PASSED  !!    PASS>PASSED OK    PASS>PASSED  OK
+1_fail_2_pass_3_pass_C    FAIL>PASSED  !!    PASS>PASSED OK    PASS>PASSED  OK
+1_fail_2_pass_3_pass_E    FAIL>PASSED  !!    PASS>PASSED OK    PASS>MISSING !!
+1_fail_2_pass_3_pass_F    FAIL>PASSED  !!    PASS>PASSED OK    PASS>FAILED  !!
+1_pass_2_pass_3_fail_A    PASS>PASSED  OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_fail_B    PASS>PASSED  OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_fail_C    PASS>PASSED  OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_pass_A    PASS>PASSED  OK    PASS>PASSED OK    PASS>FAILED  !!
+1_pass_2_pass_3_pass_B    PASS>PASSED  OK    PASS>PASSED OK    PASS>PASSED  OK
+1_pass_2_pass_3_pass_C    PASS>PASSED  OK    PASS>PASSED OK    PASS>PASSED  OK
+
+overall step accuracy: 28/36 (77.8%)     dev, August: 26/36 (72.2%)
+step 1: 5 errors, all FALSE PASSES — credits work that was not done
+step 3: 3 errors, all FALSE FAILS  — rejects work that was done
+status distribution: PASSED=28, FAILED=2, MISSING=6
+```
+
+| | prod | dev, August |
+|---|---|---|
+| clips that returned no verdicts | **0 of 12** | 2 of 12 |
+| omitted o-ring caught | **1 of 6** | 0 of 6 |
+| omitted wrench caught | 4 of 4 | 3 of 3 answered |
+| wrench used, but rejected | **3 of 9** | 0 |
+
+**The o-ring blind spot holds.** Five of six omitted o-rings pass, most with the same
+invented detail as on dev (*"placing an O-ring into its groove"*). One run caught it
+for the first time on a single-omission clip: *"The video does not show the rubber
+O-ring being installed into the blue block-off cap."*
+
+**New on prod: correct wrench work is rejected.** Step 3 was reliable on dev. On prod
+it rejected the wrench step on three clips where the frames show the wrench clamped on
+the cap and turning it — committed under
+[`reference/prod-2026-10-26/`](reference/prod-2026-10-26). The reasons describe the
+end of the clip, where the wrench lies on the mat, not what happened:
+
+- `pass_A` — *"picks up the wrench but does not use it … then place the manifold into
+  a plastic bag."* There is no bag in the clip.
+- `pass_E` — *"The video ends after the cap is hand-tightened."* It runs 20 s past the
+  wrench step.
+- `pass_F` — *"The wrench is present on the mat but is never used."*
+
+So errors now run **both ways**: step 1 passes work that was not done, step 3 fails work
+that was. One of the three is a clean take with every step done, which is the case a QA
+gate cannot afford — it rejects a good assembly.
+
+**Still deterministic.** `pass_A` from the sweep and from a separate single run 23
+minutes earlier are byte-identical apart from the input id, so these verdicts are
+reproducible rather than noise.
+
+**Not visible from the API:** which GPU served these runs. `/logs` carries no node or
+device field.
 
 ## What comes back
 
@@ -624,7 +688,9 @@ reliable terminality signal.
 
 ### Cold start dominates, and nothing is cached
 
-Measured on dev with `whisper:large-v3`; prod's `whisper-base` should load faster.
+Measured on dev with `whisper:large-v3`. On prod (2026-10-26), `whisper-base` loads in
+~4 s, newton-fusion still downloads from scratch on every run (~4m50s) and loads in
+1m48s–5m42s (usually ~1m50s), and a job takes 488–729 s. Nothing is cached between runs there either.
 
 | phase | time |
 |---|---|
@@ -637,7 +703,9 @@ Two back-to-back runs on the same GPU each downloaded newton-fusion from scratch
 **~7 of every 13 minutes is model loading**, and the marginal cost of one more clip in
 a sweep is far lower than the first.
 
-**Dev serialized jobs**, and `job.admitted` is misleading about when yours starts:
+**Dev serialized jobs; prod ran two at once.** In the prod sweep each new pod started
+within 2 s of one of the two running jobs finishing. On dev, `job.admitted` was
+misleading about when yours starts:
 
 ```
 21:51:57  job.admitted   Job scheduled after 12s in queue     <-- not the real start
@@ -1153,6 +1221,8 @@ Ordered by value, and every one of them is backed by a run in this repo.
 | `data/clips/` | The twelve clips, committed — 80 MB, no LFS. Ground truth is in each filename. |
 | `reference/` | **Every number in this README is scored from here, offline.** `sweep/` the 12-clip run · `grid-5752/` the SOP-format 2×2 · `strict-sop/` and `size-448/` the two mitigations that returned nothing · `oring-never-fitted-…/` the frames proving a false pass is fabricated · plus the 44-byte empty result and a blueprint snapshot. |
 | `eval_paired/` | The stem-paired 12-clip sweep — the second run of the baseline. |
+| `eval_prod/` | The 12-clip baseline on prod, 2026-10-26 — the third run, and the first on the new blueprint. |
+| `reference/prod-2026-10-26/` | The first prod single run, and frames showing the wrench in use on the three clips where prod said it was not. |
 | `eval_iter/` | One result per SOP variant, `<clip>-<sop>_f<frames>_t<budget>.json`. `iterate_sop.py --compare` reproduces the null-result table. |
 | `eval_out/` | Where `sweep.py` writes by default. Gitignored — regenerable. |
 | `docs/` | The TVA design doc this example implements. **Gitignored — internal.** |
@@ -1161,11 +1231,10 @@ Ordered by value, and every one of them is backed by a run in this repo.
 
 Roughly in order of what would teach us most per GPU-minute.
 
-- **Re-run the baseline on prod.** `python3 sweep.py --all --submit-all --out-dir eval_prod`
-  against the 2026-10-15 blueprint — a separate `--out-dir`, because `--all` skips any
-  clip whose output is already in `eval_out/`, so a local checkout with dev results
-  would run nothing. The new blueprint changed the transcriber and the defaults, so
-  whether 0 of 6 still holds is the first thing to establish before any of the below.
+- **Why prod rejects wrench work that was done.** Three false FAILs on step 3, each
+  with a reason describing the clip's final frames. Trimming the idle tail off
+  `1_fail_2_pass_3_pass_E` (43 s, the last ~20 s static) is a one-run test of whether
+  the end state is what decides it.
 - **`min_temporal_similarity_threshold`, now that prod wires it.** Compression could
   free context for more frames or a larger `size` — the trade-off that sank the 448 run.
 - **A clip with the O-ring pile OFF CAMERA.** The sharpest test of the object-presence
