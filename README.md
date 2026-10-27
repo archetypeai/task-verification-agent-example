@@ -1,7 +1,7 @@
 # Task Verification Agent — End-to-End Example
 
 A realistic, end-to-end walkthrough of running the **Task Verification Agent (TVA)**
-on the Archetype AI Platform (Dev): feed it a procedure video and an SOP, get back
+on the Archetype AI Platform (prod): feed it a procedure video and an SOP, get back
 a per-step PASSED / FAILED / MISSING verdict with timestamps and a reason, then
 score it against ground truth.
 
@@ -15,9 +15,17 @@ it caught the omitted wrench **3 of 3 times** and the omitted o-ring **0 of 6** 
 passing work that was not done, with confident invented detail about fitting a part
 that was never fitted. [Full results below.](#results--12-clips-and-one-finding-that-matters-more-than-the-accuracy)
 
+> **Where the numbers come from.** Every result, timing and limit in this README was
+> measured on the **dev** platform in August 2026, against the `tva` blueprint as it
+> stood then. The example now targets **prod** (`https://platform.u1.archetypeai.app/api`),
+> whose `tva` blueprint was republished on 2026-10-15 with a different transcriber and
+> new value ranges — see [Running on prod](#running-on-prod). The 12-clip baseline was
+> re-run there on 2026-10-26: [the o-ring blind spot holds, and a new failure appeared](#results-on-prod--12-clips-2026-10-26).
+
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
-(`newton-fusion:1.0` and `whisper:large-v3`), so like
+(`newton-fusion-1-0` and `whisper-base` on prod; `newton-fusion:1.0` and
+`whisper:large-v3` on the August dev blueprint), so like
 [MGA](https://github.com/archetypeai/manual-generation-agent-example) — and unlike
 [RED](https://github.com/archetypeai/rare-event-detection-agent-example) and
 [OSM](https://github.com/archetypeai/operational-state-monitoring-agent-example) —
@@ -53,19 +61,25 @@ against my procedure", and most of this README is about the consequences.
 ## Quick start — one command
 
 Nothing to build and nothing to fit — **no `atai_core`, no GPU, no AWS**. Python 3
-and a dev API key:
+and a prod API key:
 
 ```sh
-cp .env.example .env           # add ATAI_API_KEY and ATAI_API_ENDPOINT
+cp .env.example .env           # add ATAI_API_KEY; the endpoint is already set
 python3 run_tva_example.py
+```
+
+```sh
+# .env
+ATAI_API_KEY=<API key>
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
 ```
 
 Upload video + SOP → create a bundle → run → stream `/logs` → download → print the
 report and score it. Budget **20-30 minutes**, not the ~13 of job time: a run is
 754-1614 s once it starts (of which ~7 min is model loading, on every run, never
-cached) and **the queue is not included in that.** Dev has one GPU shared across
-orgs; observed waits range from 12 s to 796 s, and one 41-minute wall clock for a
-17-minute job. If nothing has happened for ten minutes, it is queued, not hung —
+cached) and **the queue is not included in that.** On dev, where these figures were
+measured, one GPU was shared across orgs; observed waits ranged from 12 s to 796 s,
+and one 41-minute wall clock for a 17-minute job. If nothing has happened for ten minutes, it is queued, not hung —
 `job.admitted` in `/logs` tells you which.
 
 To check every clip instead of one — same bundle, same SOP, one run per video:
@@ -77,10 +91,11 @@ python3 sweep.py --all --submit-all        # queue all 12 up front, then collect
 python3 evaluate.py eval_out/tva-output-*.json
 ```
 
-**`--submit-all` holds your place in the queue; it does not run the clips in
-parallel.** Dev has one GPU and executes jobs one at a time regardless, so the wall
-clock stays hours either way — the paired 12-clip sweep took ~2.2 h this way against
-a ~2.6 h sequential estimate. What it prevents is losing the GPU *between* your
+**`--submit-all` holds your place in the queue; it did not run the clips in
+parallel on dev**, which had one GPU and executed jobs one at a time, so the wall
+clock stayed hours either way — the paired 12-clip sweep took ~2.2 h this way against
+a ~2.6 h sequential estimate. **Prod ran two jobs at once** on 2026-10-26, and the
+12-clip sweep took 51 min from first pod to last result. What it prevents is losing the GPU *between* your
 clips: submitting one at a time leaves the slot unclaimed after each run, and a job
 from another org can take it. An 11-minute gap between `job.admitted` and a pod
 starting is the clearest case of that we saw.
@@ -129,6 +144,109 @@ never does:
 ```sh
 python3 evaluate.py reference/*.json
 ```
+
+## Running on prod
+
+Checked against prod on 2026-10-26. Two things changed; the client handles both.
+
+**The endpoint layout.** The `platform.*` endpoints end in `/api`, and the files API
+lost its version prefix:
+
+| | legacy (`https://api.dev.u1.archetypeai.app`) | prod (`https://platform.u1.archetypeai.app/api`) |
+|---|---|---|
+| agents | `<endpoint>/agents/…` | `<endpoint>/agents/…` |
+| files | `<endpoint>/v0.5/files/…` | `<endpoint>/files/…` — `/v0.5` is a 404 |
+| a run output's `ref` | resolves under `/v0.5` | resolves under `<endpoint>` |
+
+`tva_api.files_root()` picks the right prefix from the endpoint (an endpoint ending in
+`/api` is the new layout), so the legacy hosts still work. The `/agents` API is no
+longer dev-only.
+
+**The `tva` blueprint** (`blp_3aswaf72w58etvp7v4kc4xrmxw`, 2026-10-15) differs from the
+August dev snapshot in [`reference/blueprint-tva-snapshot.json`](reference/blueprint-tva-snapshot.json):
+
+| | August dev | prod, 2026-10-15 |
+|---|---|---|
+| models | `newton-fusion:1.0`, `whisper:large-v3` | `newton-fusion-1-0`, **`whisper-base`** |
+| graph nodes | `fusion`, `whisper` | `generator`, `transcriber` |
+| `max_frames` | default 16 | default **64**, must be `1..=64` |
+| `max_new_tokens` | default 16384 (observed) | default **8192** |
+| `size` | unchecked | must be `224..=2048` |
+| `min_temporal_similarity_threshold` | not wired | **wired**, default `0.0` (off) |
+| `artifacts` map | pinned S3 checkpoints | absent |
+| sink | `json/per-request` | `json/per-request` |
+
+The blueprint now documents its own video-to-SOP pairing rules, which match what this
+example measured: a `<stem>.txt` pairs with every video whose name *contains* `<stem>`,
+the longest matching stem wins, and a single `.txt` applies to every video.
+
+The preflight reads the blueprint document, so the node renames need no code change,
+and every value this example sends is still wired.
+
+### Results on prod — 12 clips, 2026-10-26
+
+Same clips, same SOP (`sop/oring-numbered.txt`), same values (`max_frames: 64`,
+`max_new_tokens: 5760`) as the August baseline. Committed in [`eval_prod/`](eval_prod):
+
+```sh
+python3 evaluate.py eval_prod/tva-output-*.json
+```
+
+```
+clip                         step 1            step 2            step 3
+1_fail_2_pass_3_fail_A    FAIL>PASSED  !!    PASS>PASSED OK    FAIL>MISSING OK
+1_fail_2_pass_3_pass_A    FAIL>MISSING OK    PASS>PASSED OK    PASS>PASSED  OK
+1_fail_2_pass_3_pass_B    FAIL>PASSED  !!    PASS>PASSED OK    PASS>PASSED  OK
+1_fail_2_pass_3_pass_C    FAIL>PASSED  !!    PASS>PASSED OK    PASS>PASSED  OK
+1_fail_2_pass_3_pass_E    FAIL>PASSED  !!    PASS>PASSED OK    PASS>MISSING !!
+1_fail_2_pass_3_pass_F    FAIL>PASSED  !!    PASS>PASSED OK    PASS>FAILED  !!
+1_pass_2_pass_3_fail_A    PASS>PASSED  OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_fail_B    PASS>PASSED  OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_fail_C    PASS>PASSED  OK    PASS>PASSED OK    FAIL>MISSING OK
+1_pass_2_pass_3_pass_A    PASS>PASSED  OK    PASS>PASSED OK    PASS>FAILED  !!
+1_pass_2_pass_3_pass_B    PASS>PASSED  OK    PASS>PASSED OK    PASS>PASSED  OK
+1_pass_2_pass_3_pass_C    PASS>PASSED  OK    PASS>PASSED OK    PASS>PASSED  OK
+
+overall step accuracy: 28/36 (77.8%)     dev, August: 26/36 (72.2%)
+step 1: 5 errors, all FALSE PASSES — credits work that was not done
+step 3: 3 errors, all FALSE FAILS  — rejects work that was done
+status distribution: PASSED=28, FAILED=2, MISSING=6
+```
+
+| | prod | dev, August |
+|---|---|---|
+| clips that returned no verdicts | **0 of 12** | 2 of 12 |
+| omitted o-ring caught | **1 of 6** | 0 of 6 |
+| omitted wrench caught | 4 of 4 | 3 of 3 answered |
+| wrench used, but rejected | **3 of 9** | 0 |
+
+**The o-ring blind spot holds.** Five of six omitted o-rings pass, most with the same
+invented detail as on dev (*"placing an O-ring into its groove"*). One run caught it
+for the first time on a single-omission clip: *"The video does not show the rubber
+O-ring being installed into the blue block-off cap."*
+
+**New on prod: correct wrench work is rejected.** Step 3 was reliable on dev. On prod
+it rejected the wrench step on three clips where the frames show the wrench clamped on
+the cap and turning it — committed under
+[`reference/prod-2026-10-26/`](reference/prod-2026-10-26). The reasons describe the
+end of the clip, where the wrench lies on the mat, not what happened:
+
+- `pass_A` — *"picks up the wrench but does not use it … then place the manifold into
+  a plastic bag."* There is no bag in the clip.
+- `pass_E` — *"The video ends after the cap is hand-tightened."* It runs 20 s past the
+  wrench step.
+- `pass_F` — *"The wrench is present on the mat but is never used."*
+
+So errors now run **both ways**: step 1 passes work that was not done, step 3 fails work
+that was. One of the three is a clean take with every step done, which is the case a QA
+gate cannot afford — it rejects a good assembly.
+
+**Still deterministic.** `pass_A` from the sweep and from a separate single run 23
+minutes earlier are byte-identical apart from the input id, so these verdicts are
+reproducible rather than noise.
+
+**Not visible from the API:** which GPU served these runs. `/logs` carries no node or
+device field.
 
 ## What comes back
 
@@ -204,9 +322,9 @@ accuracy.
 
 **These clips have no audio track at all** — verified with `ffprobe`: one video
 stream, no audio stream. The blueprint runs `audio_reader → whisper →
-prompt.audio` regardless. It does **not** fail: whisper loads (35–36 s download,
-3.3–4.3 s load, on every run) and contributes nothing. So ~40 seconds of every run is
-spent loading a model that cannot help, and **the audio half of the fusion is
+prompt.audio` regardless. It does **not** fail: whisper loads (`large-v3` on dev:
+35–36 s download, 3.3–4.3 s load, on every run) and contributes nothing. So ~40
+seconds of every run is spent loading a model that cannot help, and **the audio half of the fusion is
 untested by this example.** MGA's run C proved the audio path carries real signal
 on a narrated video; nothing here exercises it.
 
@@ -519,18 +637,21 @@ a sign you have put something in `values` that belongs in a connector.
 python3 run_tva_example.py --dry-run     # print the exact payloads, call nothing
 ```
 
-Three values exist and all are honoured:
+These are the values that matter here, and all are honoured. Defaults and ranges
+are the current prod blueprint's; the "highest tried" column is from dev.
 
 | Value | This example sends | Highest tried | Notes |
 |---|---|---|---|
-| `max_frames` | **64** | 64 | Blueprint default is 16 — one frame every 1.9 s on a 30 s clip. 64 is also the reader/preprocessor batch size, so frames land in one batch. Also run at 32 and 16. |
-| `max_new_tokens` | **5760** | **16384** | Shares the context window with the prompt. 16384 — the blueprint's own default — ran fine, which puts the served `max_seq_len` at **≥ 18,754**. It returned no more answers than 5760 did, so **the ceiling is deliberately not the default**: see [Lesson 4](#4-bigger-budgets-do-not-buy-answers). |
-| `size` | not sent (224) | **448** | Every frame is resized to `size × size`, so a 1080p clip carries no more detail than a 480p one. Tried once at 448 (with frames cut to 32 to fit) and it returned **no verdicts** — visual tokens grow quadratically, starving the generation. |
+| `max_frames` | **64** | 64 | Prod default is 64 and the blueprint rejects anything outside `1..=64`. The August dev default was 16 — one frame every 1.9 s on a 30 s clip. 64 is also the reader/preprocessor batch size, so frames land in one batch. Also run at 32 and 16. |
+| `max_new_tokens` | **5760** | **16384** | Shares the context window with the prompt. Prod defaults to 8192. On dev, 16384 — that blueprint's default — ran fine, which puts the served `max_seq_len` at **≥ 18,754**. It returned no more answers than 5760 did, so **the ceiling is deliberately not the default**: see [Lesson 4](#4-bigger-budgets-do-not-buy-answers). |
+| `size` | not sent (224) | **448** | Must be `224..=2048` on prod. Every frame is resized to `size × size`, so a 1080p clip carries no more detail than a 480p one. Tried once at 448 (with frames cut to 32 to fit) and it returned **no verdicts** — visual tokens grow quadratically, starving the generation. |
+| `min_temporal_similarity_threshold` | not sent (0.0) | — | **New on prod.** Collapses runs of near-identical frames; `0.0` disables it. Untested here. |
 | `prompt` | **does not exist** | — | Not a defect to work around, just absent. The SOP replaces it. |
 
 The preflight reads the blueprint document rather than hardcoding key names, so an
 unwired value is caught before spending GPU, and every value is printed next to the
-blueprint's current default — which has changed under this example more than once:
+blueprint's current default — which has changed under this example more than once.
+From a dev run in August:
 
 ```
 max_new_tokens not set -> using 5760 (the ceiling here is 16314; a bigger budget is
@@ -567,6 +688,10 @@ reliable terminality signal.
 
 ### Cold start dominates, and nothing is cached
 
+Measured on dev with `whisper:large-v3`. On prod (2026-10-26), `whisper-base` loads in
+~4 s, newton-fusion still downloads from scratch on every run (~4m50s) and loads in
+1m48s–5m42s (usually ~1m50s), and a job takes 488–729 s. Nothing is cached between runs there either.
+
 | phase | time |
 |---|---|
 | whisper download + load | 35–36 s + 3.3–4.3 s |
@@ -578,7 +703,9 @@ Two back-to-back runs on the same GPU each downloaded newton-fusion from scratch
 **~7 of every 13 minutes is model loading**, and the marginal cost of one more clip in
 a sweep is far lower than the first.
 
-**Dev serializes jobs**, and `job.admitted` is misleading about when yours starts:
+**Dev serialized jobs; prod ran two at once.** In the prod sweep each new pod started
+within 2 s of one of the two running jobs finishing. On dev, `job.admitted` was
+misleading about when yours starts:
 
 ```
 21:51:57  job.admitted   Job scheduled after 12s in queue     <-- not the real start
@@ -780,7 +907,7 @@ omissions a reviewer most needs caught are exactly the ones in the blind spot, w
 ones it catches — a tool absent from the whole recording — are the easiest for a human
 to notice unaided.
 
-## Lessons learned (as of 2026-08-12)
+## Lessons learned (as of 2026-08-12, measured on dev)
 
 What 40-odd runs across 12 clips, 8 SOP variants, 4 blueprint versions and 5 budgets
 actually settled — and what they did not.
@@ -892,10 +1019,10 @@ small object to resolve — but it has not been ruled out.
 
   **The fix is not to rename** but to **not re-upload what is already there.**
   `tva_api.upload_file()` compares local bytes against
-  `GET /v0.5/files/download/{file_id}` and skips when they match. `iterate_sop.py` and
+  `GET /files/download/{file_id}` and skips when they match. `iterate_sop.py` and
   the default upload path go further and derive ids from *both* the clip and the SOP,
   so two variants cannot collide at all.
-- **`connectors.source[].id` wants the file BASENAME.** `/v0.5/files` returns both a
+- **`connectors.source[].id` wants the file BASENAME.** The files API returns both a
   `file_id` (the basename) and a `file_uid` (`fil_…`); the connector wants the former.
   The uid fails at source resolution, after the pod has started.
 - **Uploads enforce the DECLARED MIME type**, not the bytes. `text/plain` for the SOP,
@@ -948,8 +1075,10 @@ Three distinct failures all report `job.completed`, and none sets an error field
 
 ### API shape
 
-- **The `/agents` API is dev-only.** Prod 404s on every `/agents` path; a prod key on
-  dev returns 401. Two symptoms for the same class of mistake.
+- **The endpoint decides the files prefix.** On `platform.*` endpoints (ending in
+  `/api`) files live at `/files`; on the legacy `api.*` hosts they lived at
+  `/v0.5/files`. The wrong one is a bare 404 with no body. (On the legacy hosts, a
+  prod key on dev returned 401.)
 - **The bundle endpoint is plural.** `POST /agents/bundle` → 404. The RED and OSM
   example repos still use the singular form.
 - **Starting a run returns 202, not 201.**
@@ -970,7 +1099,7 @@ Observations for the author, not defects.
   | `max_tokens` | ✅ as `max_new_tokens` |
   | **`max_model_len`** | ❌ — *"the maximum number of total tokens the model can use in its context window, **which includes input and output tokens**"* |
   | `gpu_memory_utilization` | ❌ |
-  | `min_temporal_similarity_threshold` | ❌ |
+  | `min_temporal_similarity_threshold` | ❌ on August dev — ✅ wired on prod since 2026-10-15 |
 
   **`max_model_len` is `max_seq_len`.** The doc specifies it, describes the
   input-and-output sharing exactly as observed, and the blueprint does not expose it.
@@ -991,15 +1120,15 @@ Observations for the author, not defects.
   `max_model_len` being unreachable is a real gap in the API surface, but it is not
   what causes the empty results.
 
-  `min_temporal_similarity_threshold` is the other consequential omission: the doc
-  devotes its longest section to the temporal compression it controls — four
+  `min_temporal_similarity_threshold` was the other consequential omission on the
+  August blueprint (prod now exposes it, default `0.0`, off). The doc devotes its longest section to the temporal compression it controls — four
   stages, MAD-based adaptive segmentation, a documented *"70% compression with a
   25% performance improvement"* — and **that headline algorithmic contribution
-  cannot be evaluated through this API at all.** It is also the mechanism that
+  could not be evaluated through that API at all.** It is also the mechanism that
   would most plausibly relieve the ceiling, by shrinking the visual prompt without
   dropping frames.
 - **Audio is in V1.** The doc says F1-0 adds audio in a later version; the
-  blueprint runs `whisper:large-v3` into `prompt.audio` today.
+  blueprint runs a transcriber (`whisper-base` on prod) into `prompt.audio` today.
 - **The parser's `step` field is 0-based and undocumented.** The doc specifies
   `step: <int>` without saying where it starts.
 - **`MISSING` rows are specified to carry no timestamps** and the doc's own format
@@ -1010,8 +1139,9 @@ Observations for the author, not defects.
   exactly the predicted artefact — placeholder rows with `reason: "..."` that the model
   emits when it loops — so a `PASSED` row *without* an interval is not a verdict, and
   `evaluate.py` flags those as SUSPECT rather than scoring them.
-- **The model is fp8** — `f1_0_35b_a3b_fp8_base_040625b4d0750b`, confirming the
-  35B/3B-active MoE description and adding quantization the doc does not mention.
+- **The model is fp8** — the August dev blueprint pinned
+  `f1_0_35b_a3b_fp8_base_040625b4d0750b` (prod no longer names the checkpoint),
+  confirming the 35B/3B-active MoE description and adding quantization the doc does not mention.
 
 ## Recommendations
 
@@ -1061,9 +1191,9 @@ Ordered by value, and every one of them is backed by a run in this repo.
    through the API, so a caller can only bracket it by runs, and it moved twice during
    this work — measured at ≥ 18,754 against the doc's stated 256K. It is not what causes
    the empty results, but a caller cannot currently reason about its own budget.
-8. **Expose `min_temporal_similarity_threshold`.** The design doc's longest section is
-   the temporal compression algorithm, with a documented 70% compression and 25%
-   performance gain, and none of it is reachable from a bundle.
+8. ~~**Expose `min_temporal_similarity_threshold`.**~~ Done on prod (2026-10-15). The
+   next step is to measure it: it is the most plausible way to shrink the visual
+   prompt without dropping frames.
 9. **Document that `step` is 0-based** in the output schema. Human-authored SOPs are
    1-based, and the mismatch fails quietly — a perfect run reads as 2-of-3.
 10. **Emit progress events during processing.** Between `input_started` and the terminal
@@ -1080,7 +1210,7 @@ Ordered by value, and every one of them is backed by a run in this repo.
 | `iterate_sop.py` | **SOP iteration.** Derives the platform file ids from both the clip and the SOP (`<clip>-<sop>.mp4` + `.txt`), so variants cannot overwrite each other and an id says which SOP produced it. `--compare` scores every collected variant offline. |
 | `sweep.py` | Batch over many clips, one bundle. `--submit-all` claims queue slots up front, `--fresh` re-runs what is already on disk, `--collect` harvests after a disconnect, `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
-| `tva_api.py` | Shared stdlib client — streaming upload, idempotent re-upload, `/logs` polling, wired-value and token preflight. |
+| `tva_api.py` | Shared stdlib client — endpoint-aware files prefix (`files_root()`), streaming upload, idempotent re-upload, `/logs` polling, wired-value and token preflight. |
 | `sop/oring-numbered.txt` | **The baseline SOP**, and the default for every script. One step per line. |
 | `sop/oring.txt` | The same steps without `Step N:` prefixes — the design doc's bare format, kept for the 2×2 comparison. |
 | `sop/oring-strict.txt` | Adds status instructions and returns **zero rows** — the worked example of an SOP competing with the parser. |
@@ -1091,6 +1221,8 @@ Ordered by value, and every one of them is backed by a run in this repo.
 | `data/clips/` | The twelve clips, committed — 80 MB, no LFS. Ground truth is in each filename. |
 | `reference/` | **Every number in this README is scored from here, offline.** `sweep/` the 12-clip run · `grid-5752/` the SOP-format 2×2 · `strict-sop/` and `size-448/` the two mitigations that returned nothing · `oring-never-fitted-…/` the frames proving a false pass is fabricated · plus the 44-byte empty result and a blueprint snapshot. |
 | `eval_paired/` | The stem-paired 12-clip sweep — the second run of the baseline. |
+| `eval_prod/` | The 12-clip baseline on prod, 2026-10-26 — the third run, and the first on the new blueprint. |
+| `reference/prod-2026-10-26/` | The first prod single run, and frames showing the wrench in use on the three clips where prod said it was not. |
 | `eval_iter/` | One result per SOP variant, `<clip>-<sop>_f<frames>_t<budget>.json`. `iterate_sop.py --compare` reproduces the null-result table. |
 | `eval_out/` | Where `sweep.py` writes by default. Gitignored — regenerable. |
 | `docs/` | The TVA design doc this example implements. **Gitignored — internal.** |
@@ -1099,6 +1231,12 @@ Ordered by value, and every one of them is backed by a run in this repo.
 
 Roughly in order of what would teach us most per GPU-minute.
 
+- **Why prod rejects wrench work that was done.** Three false FAILs on step 3, each
+  with a reason describing the clip's final frames. Trimming the idle tail off
+  `1_fail_2_pass_3_pass_E` (43 s, the last ~20 s static) is a one-run test of whether
+  the end state is what decides it.
+- **`min_temporal_similarity_threshold`, now that prod wires it.** Compression could
+  free context for more frames or a larger `size` — the trade-off that sank the 448 run.
 - **A clip with the O-ring pile OFF CAMERA.** The sharpest test of the object-presence
   rule, and it needs one new recording rather than a new run: the rule predicts `MISSING`
   on step 1 for the first time. If it still passes, the rule is wrong and the finding

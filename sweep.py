@@ -95,7 +95,9 @@ def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
     likely explanation for an 11-minute gap observed between `job.admitted` and a
     pod starting. Submitting up front holds the positions.
 
-    It buys queue position, NOT parallelism: the runs still execute one at a time.
+    On dev it bought queue position, not parallelism: one GPU ran one job at a
+    time. Prod ran two at once on 2026-10-26, so there it also halves the wall
+    clock.
     And it removes the safety property of the sequential path, where a
     misconfiguration costs one run rather than all of them — so the sequential
     path stays the default.
@@ -114,8 +116,8 @@ def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
         print(f"[{i}/{len(clips)}] submitted {stem:<32s} {agent_id}")
         pending.append((stem, agent_id, out_path))
 
-    print(f"\n{len(pending)} run(s) queued. They still execute ONE AT A TIME; "
-          f"collecting in submission order.\n"
+    print(f"\n{len(pending)} run(s) queued; the platform decides how many run at "
+          f"once. Collecting in submission order.\n"
           f"Interrupting now leaves them running — cancel with:\n"
           f"  python3 sweep.py --cancel-all\n")
     log = []
@@ -435,11 +437,11 @@ def main() -> None:
             print(f"\nalready done, would be SKIPPED ({len(done)}):")
             for stem in done:
                 print(f"  {stem:<32s} {label_str(stem)}")
-        # --submit-all changes WHEN runs are submitted, not how fast they execute:
-        # dev serializes on one GPU either way. Say which mode, so the plan does not
-        # read as "sequential" when the flag was passed, but do not imply parallelism.
-        mode = ("all submitted up front, then collected in order — still ONE AT A "
-                "TIME on the GPU" if args.submit_all else "submitted one at a time")
+        # --submit-all changes WHEN runs are submitted. How many execute at once is
+        # the platform's call: one on dev, two on prod (2026-10-26).
+        mode = ("all submitted up front, then collected in order — the platform "
+                "decides how many run at once" if args.submit_all
+                else "submitted one at a time")
         print(f"\nwould run ({len(todo)}), {mode}, ~13 min each "
               f"-> ~{len(todo) * 13} min (~{len(todo) * 13 / 60:.1f} h):")
         for i, stem in enumerate(todo, 1):
@@ -447,6 +449,18 @@ def main() -> None:
         return
 
     os.makedirs(args.out_dir, exist_ok=True)
+    # Every clip already done means nothing will run. Say so before creating a
+    # bundle: the likely cause is an out-dir holding results from another
+    # environment or blueprint, which the skip check cannot tell apart.
+    if not args.fresh and all(
+            os.path.exists(os.path.join(
+                args.out_dir,
+                f"tva-output-{os.path.splitext(os.path.basename(p))[0]}.json"))
+            for p in clips):
+        sys.exit(f"nothing to run: all {len(clips)} clip(s) already have an output "
+                 f"in {args.out_dir}/.\n"
+                 f"  To run them again, write elsewhere (--out-dir eval_prod) "
+                 f"or replace them (--fresh).")
     bp = api.get_blueprint(args.blueprint)
     inert = api.inert_values(bp["document"], values)
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
@@ -461,7 +475,8 @@ def main() -> None:
         # start once per clip, which is how 40 GPU-minutes get spent on nothing.
         sys.exit(f"REFUSING TO RUN: {sink_warning}")
     print(f"values: {json.dumps(values)}")
-    print(f"{len(clips)} clip(s), sequential, ~13 min each "
+    mode = "all submitted up front" if args.submit_all else "sequential"
+    print(f"{len(clips)} clip(s), {mode}, ~13 min each "
           f"-> ~{len(clips) * 13} min total, plus queue if the GPU is busy\n")
 
     # One upload for the whole sweep: every clip is checked against the SAME
