@@ -1,0 +1,191 @@
+{
+  "clip": "1_pass_2_pass_3_pass_C",
+  "sop": "sop/oring-numbered.txt",
+  "source": "data/clips/1_pass_2_pass_3_pass_C.mp4",
+  "fps": 30.0,
+  "duration": 30.954201,
+  "seconds": 10.0,
+  "overlap": 4.0,
+  "chunks": [
+    {
+      "file": "data/clips-serving/1_pass_2_pass_3_pass_C/c10o4/00.mp4",
+      "offset": 0.0,
+      "duration": 10.05,
+      "encode": "640:480 crf23",
+      "bytes": 925843,
+      "rows": [
+        {
+          "frame_end": 302.0,
+          "frame_start": 0.0,
+          "reason": "The video clearly shows the person installing the rubber O-ring into the blue block-off cap and ensuring it is properly seated in the groove.",
+          "status": "PASSED",
+          "step": 0,
+          "timestamp_end": 10.1,
+          "timestamp_start": 0.0
+        },
+        {
+          "frame_end": null,
+          "frame_start": null,
+          "reason": "The video does not show the person threading the blue cap onto the black manifold by hand until snug, without cross-threading.",
+          "status": "MISSING",
+          "step": 1,
+          "timestamp_end": null,
+          "timestamp_start": null
+        },
+        {
+          "frame_end": null,
+          "frame_start": null,
+          "reason": "The video does not show the person using a wrench to tighten the blue cap to the specified torque.",
+          "status": "MISSING",
+          "step": 2,
+          "timestamp_end": null,
+          "timestamp_start": null
+        }
+      ]
+    },
+    {
+      "file": "data/clips-serving/1_pass_2_pass_3_pass_C/c10o4/01.mp4",
+      "offset": 6.006,
+      "duration": 10.044,
+      "encode": "640:480 crf23",
+      "bytes": 928902,
+      "rows": [
+        {
+          "frame_end": 152.0,
+          "frame_start": 0.0,
+          "reason": "The video clearly shows the person installing the rubber O-ring into the blue block-off cap and ensuring it is properly seated in the groove.",
+          "status": "PASSED",
+          "step": 0,
+          "timestamp_end": 5.1,
+          "timestamp_start": 0.0
+        },
+        {
+          "frame_end": 302.0,
+          "frame_start": 152.0,
+          "reason": "The video shows the person threading the blue cap onto the black manifold by hand until snug, without cross-threading.",
+          "status": "PASSED",
+          "step": 1,
+          "timestamp_end": 10.1,
+          "timestamp_start": 5.1
+        },
+        {
+          "frame_end": null,
+          "frame_start": null,
+          "reason": "The video does not show the person using a wrench to tighten the blue cap to the specified torque.",
+          "status": "MISSING",
+          "step": 2,
+          "timestamp_end": null,
+          "timestamp_start": null
+        }
+      ]
+    },
+    {
+      "file": "data/clips-serving/1_pass_2_pass_3_pass_C/c10o4/02.mp4",
+      "offset": 12.012,
+      "duration": 10.038,
+      "encode": "640:480 crf23",
+      "bytes": 885904,
+      "rows": [
+        {
+          "frame_end": 240.0,
+          "frame_start": 0.0,
+          "reason": "The video clearly shows the person installing the rubber O-ring into the blue block-off cap and ensuring it is properly seated in the groove.",
+          "status": "PASSED",
+          "step": 0,
+          "timestamp_end": 8.0,
+          "timestamp_start": 0.0
+        },
+        {
+          "frame_end": 270.0,
+          "frame_start": 240.0,
+          "reason": "The video shows the person threading the blue cap onto the black manifold by hand until it is snug, without cross-threading.",
+          "status": "PASSED",
+          "step": 1,
+          "timestamp_end": 9.0,
+          "timestamp_start": 8.0
+        },
+        {
+          "frame_end": 300.0,
+          "frame_start": 270.0,
+          "reason": "The video shows the person using a wrench to tighten the blue cap to the specified torque.",
+          "status": "PASSED",
+          "step": 2,
+          "timestamp_end": 10.0,
+          "timestamp_start": 9.0
+        }
+      ]
+    },
+    {
+      "file": "data/clips-serving/1_pass_2_pass_3_pass_C/c10o4/03.mp4",
+      "offset": 18.017,
+      "duration": 10.033,
+      "encode": "640:480 crf23",
+      "bytes": 942021,
+      "rows": [
+        {
+          "frame_end": 75.0,
+          "frame_start": 0.0,
+          "reason": "The video clearly shows the person installing the rubber O-ring into the blue block-off cap and seating it properly in the groove.",
+          "status": "PASSED",
+          "step": 0,
+          "timestamp_end": 2.5,
+          "timestamp_start": 0.0
+        },
+        {
+          "frame_end": 114.0,
+          "frame_start": 75.0,
+          "reason": "The person is shown threading the blue cap onto the black manifold by hand until it is snug, without any indication of cross-threading.",
+          "status": "PASSED",
+          "step": 1,
+          "timestamp_end": 3.8,
+          "timestamp_start": 2.5
+        },
+        {
+          "frame_end": 303.0,
+          "frame_start": 114.0,
+          "reason": "The person uses a wrench to tighten the blue cap onto the manifold, which is consistent with the step of tightening to the specified torque.",
+          "status": "PASSED",
+          "step": 2,
+          "timestamp_end": 10.1,
+          "timestamp_start": 3.8
+        }
+      ]
+    },
+    {
+      "file": "data/clips-serving/1_pass_2_pass_3_pass_C/c10o4/04.mp4",
+      "offset": 24.023,
+      "duration": 6.931,
+      "encode": "640:480 crf23",
+      "bytes": 610170,
+      "rows": [
+        {
+          "frame_end": 156.0,
+          "frame_start": 0.0,
+          "reason": "The video clearly shows the person using a wrench to install the rubber O-ring into the blue block-off cap, ensuring it is properly seated in the groove.",
+          "status": "PASSED",
+          "step": 0,
+          "timestamp_end": 5.2,
+          "timestamp_start": 0.0
+        },
+        {
+          "frame_end": 201.0,
+          "frame_start": 156.0,
+          "reason": "The video shows the person threading the blue cap onto the black manifold by hand until snug, without cross-threading.",
+          "status": "PASSED",
+          "step": 1,
+          "timestamp_end": 6.7,
+          "timestamp_start": 5.2
+        },
+        {
+          "frame_end": 201.0,
+          "frame_start": 201.0,
+          "reason": "The video does not show the person using a wrench to tighten the blue cap to the specified torque.",
+          "status": "FAILED",
+          "step": 2,
+          "timestamp_end": 6.7,
+          "timestamp_start": 6.7
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+max_new_tokens not set -> using 5760 (the ceiling here is 16314; a bigger budget is more room to LOOP, not to reason — see api.DEFAULT_MAX_NEW_TOKENS).
+  Pass --max-new-tokens 16314 to use the whole window instead.
+blueprint blp_4d8xdhkvhy8q7ahhvpvp9e83kn (key=tva, active=True, canonical=True)
+  max_frames       64       -> honoured   (blueprint default: 64)
+  max_new_tokens   5760     -> honoured   (blueprint default: 8192)
+  size             224      -> honoured   (blueprint default: 224)
+
+  SOP in force (3 steps, uploaded as a .txt input):
+    1. Step 1: Install the rubber O-ring into the blue block-off cap, ensuring it is properly seated in the groove.
+    2. Step 2: Thread the blue cap onto the black manifold by hand until snug, without cross-threading.
+    3. Step 3: Using a wrench, tighten the blue cap to the specified torque.
+
+uploading data/clips/1_pass_2_pass_3_pass_A.mp4 (7.8 MB) ...
+  video file_id=1_pass_2_pass_3_pass_A-oring-numbered-20261027T010939Z-9a39.mp4
+  sop   file_id=1_pass_2_pass_3_pass_A-oring-numbered-20261027T010939Z-9a39.txt
+  stems match — nothing else writes to this pair
+creating bundle ...
+  bundle_id=bnd_6ntyctbhwg8m8s5w5sprm460gx  status=ready
+started run
+  agent_id=agt_754681e1nk8adsk1snkj0z7cq2
+  watching /logs (~7 min of model loading first) ...
+  01:09:58 INFO    job.inputs.resolution.started Resolving 2 inputs
+  01:09:58 SUCCESS job.inputs.resolution.completed Resolved 2 inputs in 0.01s
+  01:09:59 INFO    job.admitted                 Job scheduled after 17s in queue
+  01:10:00 INFO    started                      Starting agent runner
+  01:10:00 INFO    parsing                      Parsing blueprint Task Verification
+  01:10:00 INFO    instantiating                Instantiating execution graph
+  01:10:00 INFO    transcriber.loading          Starting downloading whisper-base model
+  01:10:01 INFO    job.started                  Job started — first pod is now running
+  01:10:03 INFO    transcriber.loading          Finished downloading whisper-base model in 3.2s
+  01:10:03 INFO    transcriber.loading          Starting loading whisper-base model
+  01:10:05 INFO    transcriber.loading          Finished loading whisper-base model in 1.4s
+  01:10:05 INFO    generator.loading            Starting downloading newton-fusion-1-0 model
+  01:15:03 INFO    generator.loading            Finished downloading newton-fusion-1-0 model in 4min58s
+  01:15:03 INFO    generator.loading            Starting loading newton-fusion-1-0 model
+  01:16:56 INFO    generator.loading            Finished loading newton-fusion-1-0 model in 1min52s
+  01:16:56 INFO    executing                    Starting graph execution
+  01:17:01 INFO    input_started                Starting processing input 1_pass_2_pass_3_pass_A-oring-numbered-20261027T010939Z-9a39
+  01:18:20 INFO    completed                    Agent execution terminated successfully
+  01:18:23 SUCCESS job.completed                Job completed in 502s
+
+run completed
+  saved eval_dev/tva-output-1_pass_2_pass_3_pass_A.json (926 bytes, md5 ae203f0530dbf5b9522e2f38c19357a4)
+
+verification report for 1_pass_2_pass_3_pass_A-oring-numbered-20261027T010939Z-9a39 — 3 step(s)
+  step 1 (parser step=0)  PASSED   [  3.9 -  10.0s]  The video clearly shows the person picking up the blue cap and the O-ring, then carefully placing the O-ring into the groove of the blue cap.
+  step 2 (parser step=1)  PASSED   [ 10.0 -  18.0s]  The person is shown taking the blue cap with the O-ring and threading it onto the black manifold by hand until it is snug.
+  step 3 (parser step=2)  FAILED   [ 18.0 -  28.0s]  The person picks up the wrench but does not use it to tighten the cap. Instead, they put the cap and wrench down and then place the manifold into a plastic bag. The step of tightening with a wrench is not performed.
+
+  scored against the filename's labels (1=pass/2=pass/3=pass):
+    step 1: expected PASS  got PASSED   [OK  ]
+    step 2: expected PASS  got PASSED   [OK  ]
+    step 3: expected PASS  got FAILED   [MISS]
+
+md5 ae203f0530dbf5b9522e2f38c19357a4  (926 bytes)
