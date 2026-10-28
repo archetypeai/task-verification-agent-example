@@ -954,8 +954,11 @@ and loads the models again. **Agent serving** runs the same `tva` bundle with
 upload, queue or polling. Twelve clips cost one load and twelve answers instead of
 twelve loads.
 
-**Dev and staging only, for now.** It came with the GPU-backed agents milestone
-(PLDEV-2343, PLDEV-2195), and its limits are today's:
+> **Agent serving is available on dev only, as of 2026-10-28.** Not on prod or
+> staging yet: batch (Stages 4 and 5) is what prod offers.
+
+It came with the GPU-backed agents milestone (PLDEV-2343, PLDEV-2195), and its limits
+are today's:
 
 - **One GPU agent at a time on dev.** A second one is refused while the first runs, so
   `sweep_serve.py` cancels its agent on exit, Ctrl-C included, unless `--keep`. An
@@ -968,9 +971,12 @@ twelve loads.
   over it (5–11 MB), so `sweep_serve.py` re-encodes each one into `data/clips-serving/`
   (gitignored) at 640×480, CRF 28, no audio: 0.6–1.4 MB, 0.74–1.75 MiB as a request.
   TVA samples 64 frames at 224 px anyway, but the bytes differ from batch's.
-- **Each query has a 58 s budget.** The first query to a fresh agent can 504
-  (PLDEV-2432); `sweep_serve.py` retries 5xx until the load deadline.
-- **`/logs` is empty for a serving agent**, so the load is a silent wait for
+- **Each query has a 58 s budget.** The first query to a fresh agent used to 504; since
+  PLDEV-2432 the agent warms its models up before it reports `running`.
+  `sweep_serve.py` still retries 5xx until the load deadline.
+- **`/logs` shows the load as it happens** (since 2026-10-28, PLDEV-2479): *"Still
+  loading newton-fusion-1-0 model after 4min0s"* once a minute, then the warm-up and
+  whisper's load. `sweep_serve.py` prints it. Before, the load was a silent wait for
   `status: running`.
 - **A query can hang, and a hung query does not keep the agent alive.** In the first
   `--chunk 4` sweep (2026-10-26), one query never returned. The agent saw nothing for 20
@@ -979,13 +985,17 @@ twelve loads.
   a query 90 s (the platform's budget is 58 s), retries it at most 3 times, stops the
   sweep on a 409, and resumes on the next run from the chunks still unanswered. That
   agent also took 1,385 s to load, against 926–929 s for the two before it.
-- **One bad input ends the agent.** On the resumed sweep, a 1.1 s tail chunk (35 frames,
-  below the blueprint's 64-frame `max_frames`) got `409 … the agent's graph failed: video
-  preprocessing failed`, and the agent was gone: every later query would have been
-  refused. A 40-frame tail had earlier been answered, but in 24.6 s against ~2.5 s.
-  `sweep_serve.py` now folds any tail chunk under 64 frames into the chunk before it, so
-  every chunk sent has 89 or more. Batch never meets this: every whole clip is over 600
-  frames.
+- **A bad input used to end the agent; now it fails only its query.** On the resumed
+  sweep (2026-10-26), a 1.1 s tail chunk (35 frames, below the blueprint's 64-frame
+  `max_frames`) got `409 … the agent's graph failed: video preprocessing failed`, and the
+  agent was gone. A 40-frame tail had earlier been answered, but in 24.6 s against
+  ~2.5 s. PLDEV-2480 fixed both: a clip with an odd frame count is padded, and a clip the
+  agent cannot read gets a `400` naming the problem while the agent stays loaded
+  (checked with MGA's agent on dev, 2026-10-28: a 35-frame clip answered, an
+  audio-only mp4 and random bytes got 400s, and the next query answered).
+  `sweep_serve.py` still folds any tail chunk under 64 frames into the chunk before it,
+  so every chunk sent has 89 or more. Batch never meets this: every whole clip is over
+  600 frames.
 
 **The answer is shaped differently.** The served sink answers in `atai-records`: the
 step rows are `response.data` themselves, numbered from 0, with no `{"id", "results"}`
@@ -1484,8 +1494,8 @@ Ordered by value, and every one of them is backed by a run in this repo.
     Every clip here is 5–11 MB, so serving them means re-encoding (or chunking) first,
     and a re-encoded clip is not the input batch saw: verdicts matched on `pass_A`, but
     timestamps and reasons did not. Batch and serving should be comparable on the same
-    bytes. While at it: a serving agent's `/logs` is empty during its ~15-minute load,
-    so the wait cannot be told from a hang.
+    bytes. (A serving agent's `/logs` was empty during its load; since 2026-10-28 it
+    shows the load as it happens.)
 
 ## Repo layout
 

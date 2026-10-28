@@ -22,14 +22,13 @@ Serving runs the same `tva` bundle with {"mode": "serving"}: the agent loads
 once and answers POST /agents/instances/{id}/query for each clip, so twelve
 clips cost one load plus twelve answers instead of twelve loads.
 
-Limits today (dev and staging only):
+Limits today (agent serving is on dev only, as of 2026-10-28):
   - one GPU agent at a time on dev; another is refused while it's busy
   - the video goes inline (`"file_ids": ["base64:<mp4>"]`) and the whole body is
     capped at 2 MiB, so every clip is re-encoded to fit, into data/clips-serving/.
     TVA samples 64 frames at 224 px, so 640x480 at CRF 28 loses little, but the
     bytes differ from batch's and verdicts can too
-  - each query has a 58 s budget, and the first query to a fresh agent can 504
-    (PLDEV-2432); it is retried
+  - each query has a 58 s budget; a 504 is retried
   - an agent with no query for 20 minutes is released
 
 The agent is cancelled at the end, Ctrl-C included, unless --keep: it holds
@@ -54,9 +53,9 @@ from sweep import label_str
 OUT_DIR = "eval_serving"
 CLIP_CACHE = "data/clips-serving"
 BODY_CAP = 2 * 1024 * 1024
-# A chunk with fewer frames than the blueprint's max_frames ceiling (64) can fail the
-# agent's video preprocessing, and a graph failure ends the served agent: on dev
-# (2026-10-26) a 35-frame tail chunk did, and a 40-frame one took 10x longer to answer.
+# A chunk with fewer frames than the blueprint's max_frames ceiling (64): on dev
+# (2026-10-26) a 35-frame tail chunk ended the served agent (fixed by PLDEV-2480), and
+# a 40-frame one took 10x longer to answer.
 MIN_CHUNK_FRAMES = 64
 # Tried in order until the request fits: full resolution first, since frames are
 # what the model sees.
@@ -198,6 +197,27 @@ def wait_running(agent: str, seen: set, timeout_s: int) -> None:
         if status in ("failed", "completed", "cancelled", "canceled") or time.time() - t0 > timeout_s:
             sys.exit(f"agent {agent} is {status}, not running")
         time.sleep(10)
+
+
+def release(agent: str, bundle: str | None) -> str:
+    """Cancel the agent and, when this run made the bundle, delete both.
+
+    A bundle still referenced by a run cannot be deleted (409), so the agent goes
+    first, retried while its cancel lands.
+    """
+    base = api.agents_base()
+    api.cancel(agent)
+    if not bundle:
+        return f"cancelled {agent}"
+    for _ in range(12):
+        code, _ = api.request("DELETE", f"{base}/instances/{agent}", raw=True, allow_status=True)
+        if 200 <= code < 300 or code == 404:
+            break
+        time.sleep(5)
+    code, body = api.request("DELETE", f"{base}/bundles/{bundle}", raw=True, allow_status=True)
+    if 200 <= code < 300:
+        return f"cancelled and deleted {agent}, deleted {bundle}"
+    return f"cancelled {agent}; {bundle} NOT deleted ({code}): {str(body)[:200]}"
 
 
 class AgentGone(Exception):
@@ -361,8 +381,8 @@ def main() -> None:
         return
 
     api.load_dotenv()
-    if ".dev." not in api.api_base() and "staging" not in api.api_base():
-        sys.exit(f"agent serving is on dev and staging only; ATAI_API_ENDPOINT is {api.api_base()}")
+    if ".dev." not in api.api_base():
+        sys.exit(f"agent serving is on dev only (2026-10-28); ATAI_API_ENDPOINT is {api.api_base()}")
     log(f"{len(todo)} clip(s), {n_queries * args.repeat} queries, SOP {args.sop}")
     os.makedirs(os.path.dirname(output_path(args, "x")), exist_ok=True)
 
@@ -417,10 +437,7 @@ def main() -> None:
         if args.keep:
             log(f"agent {agent} left running (--agent {agent}); released after 20 idle min")
         else:
-            api.cancel(agent)
-            if bundle:
-                api.request("DELETE", f"{api.agents_base()}/bundles/{bundle}", raw=True, allow_status=True)
-            log(f"cancelled {agent}" + (f", deleted {bundle}" if bundle else ""))
+            log(release(agent, bundle))
         sweep_log["seconds"] = round(time.time() - t0)
         with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as f:
             json.dump(sweep_log, f, indent=2)
