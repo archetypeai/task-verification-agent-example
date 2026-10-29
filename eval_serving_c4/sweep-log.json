@@ -1,0 +1,1064 @@
+{
+  "agent": "agt_057g2b42jj9wqa06mtdtq4nabh",
+  "bundle": "bnd_24ktt03rtd8hpsk6aqg12sc3ze",
+  "sop": "sop/oring-numbered.txt",
+  "clips": [
+    {
+      "clip": "1_fail_2_pass_3_fail_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2213.768,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.995,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1676.809,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.986,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1952.407,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.013,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2070.733,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.006,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2344.494,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1753.03,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.992,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.9,
+              "tries": 1,
+              "server_ms": 1755.996,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.985,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2190.704,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2221.549,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.004,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1681.178,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.997,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2023.663,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.99,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 1998.616,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 27.984,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.0,
+              "tries": 1,
+              "server_ms": 1428.159,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1880.809,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.992,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1800.054,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 8.018,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2061.244,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.011,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2191.413,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.004,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2221.93,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.997,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2227.984,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.99,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2178.439,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 28.016,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 1548.723,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_C",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2015.251,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1703.706,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.986,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 1720.529,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.978,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.1,
+              "tries": 1,
+              "server_ms": 2285.301,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.004,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 2257.755,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_E",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 4.6,
+              "tries": 1,
+              "server_ms": 2170.635,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 2298.025,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.987,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2298.606,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.3,
+              "tries": 1,
+              "server_ms": 2676.242,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 15.972,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2244.774,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.998,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.1,
+              "tries": 1,
+              "server_ms": 2511.276,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 22.178,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.1,
+              "tries": 1,
+              "server_ms": 2688.107,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 26.202,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2348.457,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 30.196,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2186.469,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 34.19,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2069.902,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 38.182,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 4.3,
+              "tries": 1,
+              "server_ms": 1737.776,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_F",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.3,
+              "tries": 1,
+              "server_ms": 2703.152,
+              "verdicts": 4
+            }
+          ]
+        },
+        {
+          "offset": 4.027,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2296.597,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 8.02,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 4.1,
+              "tries": 1,
+              "server_ms": 2052.508,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 10.002,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.1,
+              "tries": 1,
+              "server_ms": 2590.422,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 14.291,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.2,
+              "tries": 1,
+              "server_ms": 2741.753,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 18.449,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2506.766,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 22.441,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1795.564,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_fail_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.8,
+              "tries": 1,
+              "server_ms": 1889.421,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 1807.443,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.985,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2072.516,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.012,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2088.676,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.005,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2114.62,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_fail_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 4.1,
+              "tries": 1,
+              "server_ms": 2164.362,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1737.039,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.987,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2029.628,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.013,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1732.733,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.005,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.2,
+              "tries": 1,
+              "server_ms": 1477.561,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_fail_C",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1842.206,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.994,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1784.592,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.986,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2031.288,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2111.644,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 15.973,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2113.701,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_pass_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1753.704,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1796.365,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.986,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2017.747,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.011,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2069.97,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.005,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2017.55,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.998,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1704.733,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.991,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2205.999,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 27.984,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1412.226,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_pass_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.8,
+              "tries": 1,
+              "server_ms": 1876.366,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1812.091,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.987,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1843.439,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.98,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 1988.197,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.005,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2012.264,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.998,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2012.628,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.991,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2243.478,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 27.985,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2307.319,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_pass_C",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1887.096,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 4.026,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1766.483,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 8.018,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2063.551,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.012,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2050.01,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.005,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2023.889,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.998,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 2261.332,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 24.023,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2182.774,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 28.016,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2197.358,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "seconds": 937
+}

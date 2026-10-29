@@ -41,6 +41,7 @@ import os
 import sys
 
 import tva_api as api
+from background import add_background_flag, maybe_detach
 from run_tva_example import (CLIP_DIR, BLUEPRINT_DEFAULT, load_sop, resolve_clip,
                              sop_text, parse_ground_truth, STATUSES)
 
@@ -185,7 +186,9 @@ def main() -> None:
                     help="score everything collected so far and stop — no API calls")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the ids and the SOP, upload nothing")
+    add_background_flag(ap, default_log="logs/iterate_sop.log")
     args = ap.parse_args()
+    maybe_detach(args)
 
     if args.compare:
         compare(args.out_dir)

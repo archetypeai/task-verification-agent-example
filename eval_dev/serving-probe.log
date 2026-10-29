@@ -1,0 +1,8 @@
+20:27:46 data/clips-serving/1_pass_2_pass_3_pass_A.mp4: 1,308,723 B video, request body 1,745,296 B of 2,097,152
+20:27:47 bundle bnd_203fshyvax8b3t9m8y5y8akdn1 · agent agt_74rsyh060e9pp81dy33exzwx52 (serving) · {'max_frames': 64, 'max_new_tokens': 5760}
+20:43:16 status running after 929 s
+20:43:24 query 1: 200 in 8.1 s (937 s since run) -> eval_dev/serving/serve-1_pass_2_pass_3_pass_A-640x480-crf28-q1.json
+20:43:27 query 2: 200 in 3.1 s (941 s since run) -> eval_dev/serving/serve-1_pass_2_pass_3_pass_A-640x480-crf28-q2.json
+20:43:31 query 3: 200 in 3.2 s (944 s since run) -> eval_dev/serving/serve-1_pass_2_pass_3_pass_A-640x480-crf28-q3.json
+20:43:31 3 answers, identical: False
+20:43:32 cancelled agt_74rsyh060e9pp81dy33exzwx52, deleted bnd_203fshyvax8b3t9m8y5y8akdn1

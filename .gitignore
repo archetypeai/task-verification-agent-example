@@ -34,3 +34,9 @@ __pycache__/
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Clips re-encoded by sweep_serve.py to fit the 2 MiB serving request cap — derived.
+data/clips-serving/
+
+# --background logs — one per script, appended per run.
+logs/

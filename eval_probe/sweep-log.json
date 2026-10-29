@@ -1,0 +1,34 @@
+{
+  "agent": "agt_2dyeq80jmk8e0vacr6pq08ttpm",
+  "bundle": "bnd_0z7dkyq0gx8658ztg46h0e7dbt",
+  "sop": "sop/oring-numbered.txt",
+  "clips": [
+    {
+      "clip": "1_pass_2_pass_3_pass_A",
+      "sent": "data/clips-serving/1_pass_2_pass_3_pass_A.mp4",
+      "video_bytes": 1308723,
+      "queries": [
+        {
+          "seconds": 3.7,
+          "tries": 1,
+          "server_ms": 2695.17,
+          "verdicts": 3
+        },
+        {
+          "seconds": 3.0,
+          "tries": 1,
+          "server_ms": 2684.205,
+          "verdicts": 3
+        },
+        {
+          "seconds": 3.1,
+          "tries": 1,
+          "server_ms": 2683.444,
+          "verdicts": 3
+        }
+      ],
+      "identical": true
+    }
+  ],
+  "seconds": 937
+}

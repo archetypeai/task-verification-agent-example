@@ -44,7 +44,11 @@ def load_dotenv(path: str = ".env") -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        value = value.strip()
+        # A quoted value would otherwise keep its quotes: `"https://…"` is not a URL.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
 
 
 def api_base() -> str:
@@ -79,7 +83,7 @@ def agents_base() -> str:
 
 
 def request(method: str, url: str, body=None, raw: bool = False,
-            retries: int = 4, allow_status: bool = False):
+            retries: int = 4, allow_status: bool = False, timeout: int = 120):
     """Call the API, retrying transient network failures.
 
     Runs are polled for up to an hour, and a DNS hiccup should not kill the
@@ -97,7 +101,7 @@ def request(method: str, url: str, body=None, raw: bool = False,
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = resp.read()
                 # 202 is success when starting a run. Treating only 201 as
                 # success means reporting a failure while the agent runs.

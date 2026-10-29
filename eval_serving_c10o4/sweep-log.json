@@ -1,0 +1,680 @@
+{
+  "agent": "agt_7b6fh6914k8jprtz4y4ye9mfhs",
+  "bundle": "bnd_0m53fznj288s483hga5h9axm61",
+  "sop": "sop/oring-numbered.txt",
+  "clips": [
+    {
+      "clip": "1_fail_2_pass_3_fail_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 4.2,
+              "tries": 1,
+              "server_ms": 2241.678,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.007,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1802.808,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.013,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2082.942,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 2007.068,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.005,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1808.334,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2310.093,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 17.985,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2284.839,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.99,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2140.952,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2255.885,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.005,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2239.793,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.011,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2164.437,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 18.017,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2352.472,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.99,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2164.274,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_C",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1966.591,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.006,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2254.157,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.978,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2303.205,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_E",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2089.99,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 5.974,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2058.463,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2214.797,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 17.987,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2317.447,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 22.178,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2511.949,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 28.183,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.1,
+              "tries": 1,
+              "server_ms": 1699.655,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 34.19,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.0,
+              "tries": 1,
+              "server_ms": 1618.69,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_F",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2202.945,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.009,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2180.151,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 10.002,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 2446.391,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.435,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2237.211,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_fail_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2149.582,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.005,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2118.394,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.012,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2109.279,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_fail_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2335.938,
+              "verdicts": 4
+            }
+          ]
+        },
+        {
+          "offset": 6.006,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2092.887,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.013,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 2113.891,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_fail_C",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 1891.253,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 5.974,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2289.089,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2068.874,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_pass_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1834.17,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.006,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2178.074,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.011,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1928.633,
+              "verdicts": 2
+            }
+          ]
+        },
+        {
+          "offset": 17.985,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 2373.062,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.991,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2362.338,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_pass_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1901.507,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.006,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1861.351,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.98,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2143.588,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 17.985,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2350.847,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.991,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2283.691,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_pass_2_pass_3_pass_C",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2009.813,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 6.006,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2156.108,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.012,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 3.2,
+              "tries": 1,
+              "server_ms": 2309.427,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 18.017,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 2478.646,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 24.023,
+          "encode": "640:480 crf23",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2274.485,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "seconds": 928
+}

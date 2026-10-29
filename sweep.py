@@ -41,6 +41,7 @@ import sys
 import time
 
 import tva_api as api
+from background import add_background_flag, maybe_detach
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
                             pair_names, parse_ground_truth, resolve_clip, sop_text,
                             upload_sop)
@@ -320,7 +321,9 @@ def main() -> None:
                     help="cancel every non-terminal run in the org and stop. The "
                          "escape hatch after --submit-all, since an abandoned run "
                          "blocks the shared GPU.")
+    add_background_flag(ap, default_log="logs/sweep.log")
     args = ap.parse_args()
+    maybe_detach(args)
 
     # ONE suffix for the whole sweep, so every upload from this batch shares it and
     # `<clip>-<sop>-<this timestamp>` greps as a unit in an org-wide file list. Clip

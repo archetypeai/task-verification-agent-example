@@ -64,6 +64,7 @@ import re
 import sys
 
 import tva_api as api
+from background import add_background_flag, maybe_detach
 
 # The default clip: 31 s, 640x480, three steps all performed correctly. The
 # filename encodes the ground truth — see parse_ground_truth() and the README.
@@ -535,7 +536,9 @@ def main() -> None:
                     help="run even if the blueprint's sink cannot be "
                          "instantiated (see check_sink) — normally that is a "
                          "guaranteed 7-minute failure, so it aborts instead.")
+    add_background_flag(ap, default_log="logs/run_tva_example.log")
     args = ap.parse_args()
+    maybe_detach(args)
 
     if args.show:
         show(args.show)

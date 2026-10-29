@@ -21,6 +21,9 @@ that was never fitted. [Full results below.](#results--12-clips-and-one-finding-
 > whose `tva` blueprint was republished on 2026-10-15 with a different transcriber and
 > new value ranges — see [Running on prod](#running-on-prod). The 12-clip baseline was
 > re-run there on 2026-10-26: [the o-ring blind spot holds, and a new failure appeared](#results-on-prod--12-clips-2026-10-26).
+> **Agent serving is available only on dev, as of 2026-10-28** (not on prod or staging).
+> It loads the agent once and answers each clip in ~3 s instead of a ~8-minute run:
+> [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev).
 
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
@@ -167,7 +170,7 @@ August dev snapshot in [`reference/blueprint-tva-snapshot.json`](reference/bluep
 
 | | August dev | prod, 2026-10-15 |
 |---|---|---|
-| models | `newton-fusion:1.0`, `whisper:large-v3` | `newton-fusion-1-0`, **`whisper-base`** |
+| models | `newton-fusion:1.0`, `whisper:large-v3` | `newton-fusion-1-0`, **`whisper-base`** (see below) |
 | graph nodes | `fusion`, `whisper` | `generator`, `transcriber` |
 | `max_frames` | default 16 | default **64**, must be `1..=64` |
 | `max_new_tokens` | default 16384 (observed) | default **8192** |
@@ -179,6 +182,18 @@ August dev snapshot in [`reference/blueprint-tva-snapshot.json`](reference/bluep
 The blueprint now documents its own video-to-SOP pairing rules, which match what this
 example measured: a `<stem>.txt` pairs with every video whose name *contains* `<stem>`,
 the longest matching stem wins, and a single `.txt` applies to every video.
+
+**`newton-fusion:1.0` and `newton-fusion-1-0` are one model under two names.** The
+second is the first made a valid Kubernetes name: atai_core's `mount_name()` lowercases an
+artifact key and folds everything else to `-`, and its test asserts exactly this mapping.
+It is the modelpack `modelpacks/models/newton-fusion/1.0.0/35b-a3b-fp8-base` (Newton-Fusion
+35B-A3B, fp8), the only version there, renamed when every model became a DVC-pinned
+modelpack in early October (PLDEV-2255). Whether its weights are byte-identical to what
+the August blueprint loaded cannot be checked: that checkpoint was pinned nowhere we can
+compare. So the step-3 regression below is tied to the **republish** — transcriber, node
+graph and model packaging changed together — not proven to come from the model. It is
+also not the model behind `/query`'s Newton C 2.6 (`Newton::c2_6_8b_fp8_…`), a separate 8B
+checkpoint.
 
 The preflight reads the blueprint document, so the node renames need no code change,
 and every value this example sends is still wired.
@@ -672,6 +687,21 @@ python3 sweep.py --all --submit-all           # all twelve — see Quick start
 
 Ctrl-C cancels the in-flight run rather than orphaning it on the shared GPU.
 
+**Anything long, run it with `--background`.** `run_tva_example.py`, `sweep.py`,
+`iterate_sop.py` and `sweep_serve.py` all take it: the command relaunches itself under
+`nohup`, so closing the terminal does not kill it, with `caffeinate -i -w <pid>` keeping
+the Mac awake until it ends, and logs to `logs/<script>.log`:
+
+```sh
+python3 sweep_serve.py --all --chunk 4 --background
+# running in the background (pid 28680, caffeinate keeps the Mac awake)
+#   follow:  tail -f logs/sweep_serve.log
+#   stop:    kill 28680      # cleans up like Ctrl-C
+```
+
+`kill <pid>` is delivered as Ctrl-C, so a sweep still cancels its run or its serving
+agent on the way out. `--background other.log` picks the log file.
+
 ### If the client dies, the runs do not
 
 The runs live on the **platform**, and outputs do not expire — so a closed laptop or a
@@ -701,7 +731,8 @@ Measured on dev with `whisper:large-v3`. On prod (2026-10-26), `whisper-base` lo
 
 Two back-to-back runs on the same GPU each downloaded newton-fusion from scratch. So
 **~7 of every 13 minutes is model loading**, and the marginal cost of one more clip in
-a sweep is far lower than the first.
+a sweep is far lower than the first. **Agent serving pays it once per agent instead of
+once per clip** — [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev), dev only as of 2026-10-28.
 
 **Dev serialized jobs; prod ran two at once.** In the prod sweep each new pod started
 within 2 s of one of the two running jobs finishing. On dev, `job.admitted` was
@@ -906,6 +937,269 @@ For incoming-QA work that is close to backwards: the parts are always laid out, 
 omissions a reviewer most needs caught are exactly the ones in the blind spot, while the
 ones it catches — a tool absent from the whole recording — are the easiest for a human
 to notice unaided.
+
+## Stage 6 — Serve: load once, one query per clip (dev)
+
+```sh
+python3 sweep_serve.py --clips 1_pass_2_pass_3_pass_A --repeat 3 --out-dir eval_probe
+python3 sweep_serve.py --all --background      # every clip on one loaded agent; log logs/sweep_serve.log
+python3 sweep_serve.py --all --keep            # leave it loaded…
+python3 sweep_serve.py --all --agent agt_… --fresh   # …and reuse it: no load at all
+python3 evaluate.py eval_serving/tva-output-*.json
+```
+
+Stages 4 and 5 run in **batch**: upload, run, poll, download, and every run downloads
+and loads the models again. **Agent serving** runs the same `tva` bundle with
+`{"mode": "serving"}`: the agent loads once and then answers
+`POST /agents/instances/{id}/query` for each clip in a single round trip, with no
+upload, queue or polling. Twelve clips cost one load and twelve answers instead of
+twelve loads.
+
+> **Agent serving is available on dev only, as of 2026-10-28.** Not on prod or
+> staging yet: batch (Stages 4 and 5) is what prod offers.
+
+It came with the GPU-backed agents milestone (PLDEV-2343, PLDEV-2195), and its limits
+are today's:
+
+- **One GPU agent at a time on dev.** A second one is refused while the first runs, so
+  `sweep_serve.py` cancels its agent on exit, Ctrl-C included, unless `--keep`. An
+  agent with no query for 20 minutes is released.
+- **The video goes inline.** A served agent takes no data-service file ids yet:
+  `{"model": "tv", "query": "<SOP>", "file_ids": ["base64:<mp4>"]}`, the request
+  shape of atai_core's `tv` modelpack. The SOP travels in `query`, so one agent still
+  serves every SOP.
+- **The whole request is capped at 2 MiB**, about 1.5 MB of video. Every clip here is
+  over it (5–11 MB), so `sweep_serve.py` re-encodes each one into `data/clips-serving/`
+  (gitignored) at 640×480, CRF 28, no audio: 0.6–1.4 MB, 0.74–1.75 MiB as a request.
+  TVA samples 64 frames at 224 px anyway, but the bytes differ from batch's.
+- **Each query has a 58 s budget.** The first query to a fresh agent used to 504; since
+  PLDEV-2432 the agent warms its models up before it reports `running`.
+  `sweep_serve.py` still retries 5xx until the load deadline.
+- **`/logs` shows the load as it happens** (since 2026-10-28, PLDEV-2479): *"Still
+  loading newton-fusion-1-0 model after 4min0s"* once a minute, then the warm-up and
+  whisper's load. `sweep_serve.py` prints it. Before, the load was a silent wait for
+  `status: running`.
+- **A query can hang, and a hung query does not keep the agent alive.** In the first
+  `--chunk 4` sweep (2026-10-26), one query never returned. The agent saw nothing for 20
+  minutes and was released (`completed`, exactly 20 min after the last answer), and every
+  later query got `409 … only a running agent answers queries`. So `sweep_serve.py` gives
+  a query 90 s (the platform's budget is 58 s), retries it at most 3 times, stops the
+  sweep on a 409, and resumes on the next run from the chunks still unanswered. That
+  agent also took 1,385 s to load, against 926–929 s for the two before it.
+- **A bad input used to end the agent; now it fails only its query.** On the resumed
+  sweep (2026-10-26), a 1.1 s tail chunk (35 frames, below the blueprint's 64-frame
+  `max_frames`) got `409 … the agent's graph failed: video preprocessing failed`, and the
+  agent was gone. A 40-frame tail had earlier been answered, but in 24.6 s against
+  ~2.5 s. PLDEV-2480 fixed both: a clip with an odd frame count is padded, and a clip the
+  agent cannot read gets a `400` naming the problem while the agent stays loaded
+  (checked with MGA's agent on dev, 2026-10-28: a 35-frame clip answered, an
+  audio-only mp4 and random bytes got 400s, and the next query answered).
+  `sweep_serve.py` still folds any tail chunk under 64 frames into the chunk before it,
+  so every chunk sent has 89 or more. Batch never meets this: every whole clip is over
+  600 frames.
+
+**The answer is shaped differently.** The served sink answers in `atai-records`: the
+step rows are `response.data` themselves, numbered from 0, with no `{"id", "results"}`
+around them. `sweep_serve.py` wraps them so `evaluate.py` scores serving and batch
+alike.
+
+### What it measured — `pass_A`, dev, 2026-10-26
+
+One clip, three queries per agent, on two agents 20 minutes apart, against the batch
+run of the same clip on dev the same day ([`eval_dev/serving/`](eval_dev/serving), log in
+[`eval_dev/serving-probe.log`](eval_dev/serving-probe.log)):
+
+| | batch, dev | serving, dev |
+|---|---|---|
+| model load | ~7 min, **on every clip** | **929 s and 926 s (15.5 min), once per agent** — from `run` to `status: running` |
+| per clip | ~80 s of generation in a 502 s job | first query **8.1 s** and **3.7 s** (no 504 either time), then **3.0–3.2 s**; ~2.7 s of it on the server |
+| 12 clips, estimated | ~1.7 h | ~17 min |
+| repeated query | byte-identical | step rows identical across all six, on both agents |
+| verdicts | PASSED / PASSED / FAILED | **the same**, false FAILED on step 3 included |
+
+- **The verdicts match; the details do not, byte for byte.** Step 1 starts at 0.0 s
+  served against 3.9 s in batch, and the reasons are worded differently (both invent a
+  plastic bag on step 3). The served clip was re-encoded to fit the cap, so this is
+  the input changing rather than serving disagreeing with batch.
+- **The load is longer than batch's**, in line with the 11–12 minutes the platform team
+  quotes, and there is no preloading yet. Serving pays off from the second clip.
+
+### All 12 clips, whole, on one agent — dev, 2026-10-26
+
+```sh
+python3 sweep_serve.py --all --background
+python3 evaluate.py eval_serving/tva-output-*.json
+```
+
+**694 s for all twelve: 657 s of model load, then twelve answers of 2.7–3.3 s.** Batch
+takes ~1.7 h for the same set on dev. The score matches batch, the errors do not:
+
+| | overall | step 1 (O-ring) | step 3 (wrench) |
+|---|---|---|---|
+| batch, prod (original clips) | 28/36 | 7/12 | 9/12, 3 false FAILs |
+| serving, whole clip (re-encoded) | 28/36 | 6/12 | 10/12, 2 false FAILs |
+
+Three of twelve clips changed verdict between them:
+
+```
+clip                     truth   batch  serving
+1_fail_2_pass_3_pass_A   FPP     MPP    PPP     <- the one O-ring catch, lost
+1_fail_2_pass_3_pass_E   FPP     PPM    PPP     <- a false FAIL fixed
+1_fail_2_pass_3_pass_F   FPP     PPF    PPM     <- still a false FAIL, now MISSING
+```
+
+So **serving the re-encoded clip is not a drop-in for batch on the original**: same
+accuracy, different mistakes. Whether the difference is the re-encode or serving itself
+is still open — `pass_A`, the one clip compared both ways, matched batch exactly — and a
+batch run on a re-encoded clip settles it. Batch's one O-ring catch is fragile either
+way: re-encoding the clip lost it, and so did chunking the original bytes (below).
+
+### Chunking: shorter videos, merged per step (exploratory)
+
+```sh
+python3 sweep_serve.py --all --chunk 4 --dry-run    # cut, print what would be sent, call nothing
+python3 sweep_serve.py --all --chunk 4              # the clips' own bytes, no re-encode
+python3 sweep_serve.py --all --chunk 10 --overlap 4
+python3 merge_chunks.py eval_serving_c4             # merge per rule, score each, offline
+```
+
+An option on top of the whole-clip sweep, not a replacement. With `--chunk`, each clip
+goes as several shorter videos on the same loaded agent, and every chunk's raw answer is
+saved to `<out-dir>/chunks/<clip>.json`. Why try it:
+
+- **No re-encode.** Every clip here has a keyframe every ~2 s and runs at ~253 KB/s, so a
+  chunk of 4 s or less fits the cap as the clip's own bytes, cut with `-c copy` on
+  keyframes. Longer chunks are re-encoded at CRF 23, lighter than a whole clip's 28.
+  A chunk starts on the keyframe at or before its slot and always runs to the slot's end,
+  so chunks never leave a gap; where keyframes are irregular (`pass_E`, `pass_F`) that
+  makes a few chunks up to 6 s. A tail under 64 frames is folded into the chunk before
+  (see the limits above). `--chunk 4 --dry-run` on all twelve: 83 chunks, every one the
+  original bytes, 3.0–6.0 s and 89–177 frames, at most 1.55 MB.
+- **No length limit.** A 5-minute recording becomes 30–75 queries of ~3 s on one agent.
+- **Denser frames.** 64 frames over 4 s is ~16 fps, against ~2 fps over a whole clip.
+
+What makes it hard: a served agent keeps nothing between queries, so each chunk is
+verified against the **whole SOP**. Most steps come back `MISSING` in most chunks, a
+step can span chunks, and the clip's verdict depends on how the chunks are merged.
+`merge_chunks.py` applies four rules to the saved answers, moves chunk times to clip
+times, and scores each rule with `evaluate.py`:
+
+| rule | a step is | the risk it carries here |
+|---|---|---|
+| `any` | `PASSED` if any chunk passed it | more false passes: the O-ring is on the table in every chunk |
+| `strict` | `FAILED` if any chunk failed it | more false FAILs: a 4 s slice of a step can look incomplete |
+| `majority` | the more common of `PASSED`/`FAILED`; a tie is `FAILED` | |
+| `longest` | the verdict with the longest interval | |
+
+A step no chunk saw is `MISSING`. Each merged row says how the chunks voted
+(`"chunks": "MISSINGx6 PASSEDx2"`). Merging is offline, so one GPU session can compare
+every rule and chunk size.
+
+#### Results — 4 s chunks, 12 clips, dev, 2026-10-26
+
+```sh
+python3 merge_chunks.py eval_serving_c4
+```
+
+83 chunks, all the clips' own bytes, ~2.5 s a query: the answering itself took under 3
+minutes on one agent (it took three agents to get there — the hang and the short-chunk
+crash above). Against the prod batch baseline on the full clips:
+
+| | overall | step 1 (O-ring) | step 3 (wrench) | errors |
+|---|---|---|---|---|
+| batch, prod (whole clips) | 28/36 | 7/12 | 9/12 | 5 false passes, 3 false FAILs |
+| serving, whole clips (re-encoded) | 28/36 | 6/12 | 10/12 | 6 false passes, 2 false FAILs |
+| **chunks, `any`** | **30/36** | **6/12** | **12/12** | 6 false passes |
+| chunks, `longest` | 30/36 | 6/12 | 12/12 | 6 false passes |
+| chunks, `majority` | 28/36 | 6/12 | 10/12 | 6 false passes, 2 false FAILs |
+| chunks, `strict` | 26/36 | 6/12 | 8/12 | 6 false passes, 4 false FAILs |
+
+```
+clip                     truth   batch  any  majority  strict
+1_fail_2_pass_3_fail_A   FPF     PPM    PPM  PPM       PPM
+1_fail_2_pass_3_pass_A   FPP     MPP    PPP  PPF       PPF     <- batch's only O-ring catch, lost
+1_fail_2_pass_3_pass_E   FPP     PPM    PPP  PPP       PPF     <- false FAIL fixed
+1_fail_2_pass_3_pass_F   FPP     PPF    PPP  PPP       PPP     <- false FAIL fixed
+1_pass_2_pass_3_fail_A   PPF     PPM    PPM  PPM       PPM     (wrench omissions: MISSING under
+1_pass_2_pass_3_fail_B   PPF     PPM    PPM  PPM       PPM      every rule — no chunk ever
+1_pass_2_pass_3_fail_C   PPF     PPM    PPM  PPM       PPM      passed a wrench that was not used)
+1_pass_2_pass_3_pass_A   PPP     PPF    PPP  PPF       PPF     <- false FAIL fixed
+```
+(P = PASSED, F = FAILED, M = MISSING; the three clips every source got right are left out.)
+
+- **Chunking fixes the step-3 false FAILs.** Under `any`, all three wrench uses that the
+  whole clip rejected pass, and all three wrench omissions still come back `MISSING`:
+  step 3 is 12/12. That fits the earlier reading of the false FAILs — on a whole clip the
+  model judged the end state; a chunk that contains the tightening shows it.
+- **It makes the O-ring blind spot complete.** 0 of 6 omitted O-rings caught, against
+  1 of 6 in batch: the one catch (`1_fail_2_pass_3_pass_A`) is lost, as predicted —
+  every chunk shows the O-ring pile, so each is another chance to pass it. The overall
+  gain is all step 3; on the step that matters most for QA, chunking is worse.
+- **Rules that punish a single FAILED chunk bring the false FAILs back.** A 4 s slice of
+  the tightening can look unfinished, so `strict` and `majority` reject work `any` accepts.
+- **One chunk invented a step.** `1_fail_2_pass_3_pass_F`'s first chunk returned a 4th
+  row (`step: 3`, `MISSING`, "the video ends before the person uses a wrench…") for a
+  3-step SOP. The merge carries it as an extra `MISSING` step; `evaluate.py` scores only
+  the SOP's three.
+
+#### 10 s chunks, 4 s overlap — dev, 2026-10-27
+
+```sh
+python3 sweep_serve.py --all --chunk 10 --overlap 4 --background
+python3 merge_chunks.py eval_serving_c10o4
+```
+
+51 chunks, re-encoded at CRF 23 (a 10 s chunk is ~2.5 MB raw, over the cap), answered in
+about 2 minutes after a 739 s load.
+
+| | overall | step 1 (O-ring) | step 3 (wrench) |
+|---|---|---|---|
+| 10 s chunks, `any` / `majority` / `longest` | **30/36** | 6/12 | **12/12** |
+| 10 s chunks, `strict` | 28/36 | 6/12 | 10/12 |
+
+- **The same verdicts as 4 s chunks under `any`, clip for clip** — and now `majority`
+  agrees. With 10 s windows a step falls inside one chunk rather than across two or three,
+  so fewer chunks see a fragment of the tightening and call it unfinished. Only `strict`
+  still rejects good work.
+- **The O-ring blind spot does not move: 0 of 6**, at 4 s and at 10 s, on original bytes
+  and re-encoded.
+- **Two more malformed answers.** One `pass_A` chunk returned two rows, leaving out step 3,
+  and a `fail_B` chunk returned a fourth step again. The merge treats a missing row as
+  "this chunk did not see the step".
+
+**Across everything so far**, on the same 12 clips:
+
+| | overall | O-ring caught | wrench steps right |
+|---|---|---|---|
+| batch, prod, whole original clips | 28/36 | 1 of 6 | 9 of 12 |
+| serving, whole re-encoded clips | 28/36 | 0 of 6 | 10 of 12 |
+| serving, 4 s chunks, `any` | 30/36 | 0 of 6 | 12 of 12 |
+| serving, 10 s chunks, `any` or `majority` | 30/36 | 0 of 6 | 12 of 12 |
+
+Chunking fixes the wrench false FAILs and does nothing for the O-ring, which is the failure
+that matters for QA. Twelve clips: a direction, not a measurement.
+
+### How long all twelve took
+
+| approach | where | wall clock | how it was spent |
+|---|---|---|---|
+| batch | dev, August (shared GPU) | ~2.2 h | 12 jobs in turn, 763–1,614 s each, plus queueing |
+| batch | prod, 2026-10-26 | 51 min | 12 jobs of 488–729 s, two at a time, each loading the model |
+| batch | dev, new GPU workers | ~1.7 h (estimate) | 12 × ~502 s in turn, from one measured run |
+| **serving, whole clips** | dev | **11.6 min** | 657 s load once, then 12 answers in 37 s |
+| **serving, 4 s chunks** (83) | dev | **14.0 min** | 689 s load, then 59 answers in 148 s (the clean, resumed run) |
+| **serving, 10 s chunks** (51) | dev | **14.5 min** | 739 s load, then 51 answers in 128 s |
+| serving, whole clips, rerun 2026-10-28 | dev | 12.9 min | 731 s load, then 12 answers in 39 s |
+| serving, 4 s chunks, rerun 2026-10-28 (83) | dev | 15.6 min | 706 s load, then all 83 answers in 229 s, one agent, no retries |
+| serving, 10 s chunks, rerun 2026-10-28 (51) | dev | 15.5 min | 789 s load, then 51 answers in 139 s |
+
+Once loaded, a video costs ~3 s whole, ~11 s as 10 s chunks and ~20 s as 4 s chunks,
+against a fresh 8–27 minutes in batch, so the gap widens with every video added. Two
+costs the table hides: the load ranged from 657 s to 1,385 s across five agents, and the
+4 s chunks took three agents to finish — the hang and the short-chunk crash added ~105
+minutes, ~2 h in all. On 2026-10-28, after the platform fixes, all three sweeps ran
+start to finish on one agent each and returned byte-identical answers to 10-26's, so the
+scores above stand. A bad clip now fails only its own query (400) instead of the agent.
 
 ## Lessons learned (as of 2026-08-12, measured on dev)
 
@@ -1201,6 +1495,12 @@ Ordered by value, and every one of them is backed by a run in this repo.
     can be attributed.
 11. **Reconsider loading whisper when the video has no audio track.** It costs ~40 s of
     every run here and contributes nothing.
+12. **Let a served agent take data-service file ids, or raise the 2 MiB request cap.**
+    Every clip here is 5–11 MB, so serving them means re-encoding (or chunking) first,
+    and a re-encoded clip is not the input batch saw: verdicts matched on `pass_A`, but
+    timestamps and reasons did not. Batch and serving should be comparable on the same
+    bytes. (A serving agent's `/logs` was empty during its load; since 2026-10-28 it
+    shows the load as it happens.)
 
 ## Repo layout
 
@@ -1209,6 +1509,9 @@ Ordered by value, and every one of them is backed by a run in this repo.
 | `run_tva_example.py` | **Start here.** One clip end to end: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--dry-run`, `--show` and `--repro-empty --offline` need no API key. |
 | `iterate_sop.py` | **SOP iteration.** Derives the platform file ids from both the clip and the SOP (`<clip>-<sop>.mp4` + `.txt`), so variants cannot overwrite each other and an id says which SOP produced it. `--compare` scores every collected variant offline. |
 | `sweep.py` | Batch over many clips, one bundle. `--submit-all` claims queue slots up front, `--fresh` re-runs what is already on disk, `--collect` harvests after a disconnect, `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
+| `sweep_serve.py` | **Stage 6.** The sweep over agent serving (dev): one loaded agent, one `/query` per clip, each clip re-encoded under the 2 MiB request cap. `--repeat` checks determinism, `--keep`/`--agent` reuse a loaded agent, `--chunk`/`--overlap` send each clip as shorter videos, `--dry-run` is offline. |
+| `merge_chunks.py` | Stage 6, chunking: merges `sweep_serve.py --chunk` answers into one verdict per step under four rules and scores each. Offline. |
+| `background.py` | `--background` for the long scripts: `nohup`, `caffeinate -i -w`, a log in `logs/` (gitignored), and `kill` handled like Ctrl-C. Adapted from the LARCO quickstart's. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
 | `tva_api.py` | Shared stdlib client — endpoint-aware files prefix (`files_root()`), streaming upload, idempotent re-upload, `/logs` polling, wired-value and token preflight. |
 | `sop/oring-numbered.txt` | **The baseline SOP**, and the default for every script. One step per line. |
@@ -1224,12 +1527,20 @@ Ordered by value, and every one of them is backed by a run in this repo.
 | `eval_prod/` | The 12-clip baseline on prod, 2026-10-26 — the third run, and the first on the new blueprint. |
 | `reference/prod-2026-10-26/` | The first prod single run, and frames showing the wrench in use on the three clips where prod said it was not. |
 | `eval_iter/` | One result per SOP variant, `<clip>-<sop>_f<frames>_t<budget>.json`. `iterate_sop.py --compare` reproduces the null-result table. |
+| `eval_dev/` | `pass_A` on dev's GPU workers, 2026-10-26: the batch run, and under `serving/` the three served answers Stage 6 measures. |
+| `eval_probe/` | The second serving probe of `pass_A` (`sweep_serve.py --repeat 3`): same rows as the first, on a fresh agent. |
+| `data/clips-serving/` | The clips re-encoded, or cut into chunks, to fit the serving request cap. Gitignored — `sweep_serve.py` regenerates them. |
 | `eval_out/` | Where `sweep.py` writes by default. Gitignored — regenerable. |
 | `docs/` | The TVA design doc this example implements. **Gitignored — internal.** |
 
 ## Not yet built
 
-Roughly in order of what would teach us most per GPU-minute.
+Roughly in order of what would teach us most per GPU-minute. Agent serving (Stage 6)
+makes most of these cheap: on one loaded agent, a clip costs ~3 s rather than a run.
+
+- **Batch on the re-encoded clips.** Whole-clip serving changed 3 of 12 clips' verdicts
+  against batch on the originals. Batch on `1_fail_2_pass_3_pass_A`'s re-encode (one run,
+  the lost O-ring catch) says whether the re-encode or serving caused it.
 
 - **Why prod rejects wrench work that was done.** Three false FAILs on step 3, each
   with a reason describing the clip's final frames. Trimming the idle tail off
