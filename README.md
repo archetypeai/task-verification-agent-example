@@ -21,8 +21,9 @@ that was never fitted. [Full results below.](#results--12-clips-and-one-finding-
 > whose `tva` blueprint was republished on 2026-10-15 with a different transcriber and
 > new value ranges — see [Running on prod](#running-on-prod). The 12-clip baseline was
 > re-run there on 2026-10-26: [the o-ring blind spot holds, and a new failure appeared](#results-on-prod--12-clips-2026-10-26).
-> **Agent serving**, on dev only for now, loads the agent once and answers each clip in
-> ~3 s instead of a ~8-minute run: [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev).
+> **Agent serving is available only on dev, as of 2026-10-28** (not on prod or staging).
+> It loads the agent once and answers each clip in ~3 s instead of a ~8-minute run:
+> [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev).
 
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
@@ -731,7 +732,7 @@ Measured on dev with `whisper:large-v3`. On prod (2026-10-26), `whisper-base` lo
 Two back-to-back runs on the same GPU each downloaded newton-fusion from scratch. So
 **~7 of every 13 minutes is model loading**, and the marginal cost of one more clip in
 a sweep is far lower than the first. **Agent serving pays it once per agent instead of
-once per clip** — [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev), dev only.
+once per clip** — [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev), dev only as of 2026-10-28.
 
 **Dev serialized jobs; prod ran two at once.** In the prod sweep each new pod started
 within 2 s of one of the two running jobs finishing. On dev, `job.admitted` was
