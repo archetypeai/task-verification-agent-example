@@ -1,19 +1,269 @@
 {
-  "agent": "agt_08w5hpsdqf9xts7dqn0x2fvk2b",
-  "bundle": "bnd_1axavv6crs8qcsswj3389bxddt",
+  "agent": "agt_057g2b42jj9wqa06mtdtq4nabh",
+  "bundle": "bnd_24ktt03rtd8hpsk6aqg12sc3ze",
   "sop": "sop/oring-numbered.txt",
   "clips": [
     {
       "clip": "1_fail_2_pass_3_fail_A",
       "chunks": [
         {
-          "offset": 16.006,
+          "offset": 0.0,
           "encode": "copy",
           "queries": [
             {
               "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2353.71,
+              "server_ms": 2213.768,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.995,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1676.809,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.986,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1952.407,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.013,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2070.733,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.006,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2344.494,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_A",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1753.03,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.992,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.9,
+              "tries": 1,
+              "server_ms": 1755.996,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.985,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 2190.704,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.979,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2221.549,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.004,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1681.178,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.997,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.8,
+              "tries": 1,
+              "server_ms": 2023.663,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.99,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.6,
+              "tries": 1,
+              "server_ms": 1998.616,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 27.984,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.0,
+              "tries": 1,
+              "server_ms": 1428.159,
+              "verdicts": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "clip": "1_fail_2_pass_3_pass_B",
+      "chunks": [
+        {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.4,
+              "tries": 1,
+              "server_ms": 1880.809,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.992,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.2,
+              "tries": 1,
+              "server_ms": 1800.054,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 8.018,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2061.244,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 12.011,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2191.413,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 16.004,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2221.93,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 19.997,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.0,
+              "tries": 1,
+              "server_ms": 2227.984,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 23.99,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 2178.439,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 28.016,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.9,
+              "tries": 1,
+              "server_ms": 1548.723,
               "verdicts": 3
             }
           ]
@@ -24,13 +274,61 @@
       "clip": "1_fail_2_pass_3_pass_C",
       "chunks": [
         {
+          "offset": 0.0,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.5,
+              "tries": 1,
+              "server_ms": 2015.251,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 3.993,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.3,
+              "tries": 1,
+              "server_ms": 1703.706,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 7.986,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 2.7,
+              "tries": 1,
+              "server_ms": 1720.529,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
+          "offset": 11.978,
+          "encode": "copy",
+          "queries": [
+            {
+              "seconds": 3.1,
+              "tries": 1,
+              "server_ms": 2285.301,
+              "verdicts": 3
+            }
+          ]
+        },
+        {
           "offset": 16.004,
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.6,
+              "seconds": 2.9,
               "tries": 1,
-              "server_ms": 2290.124,
+              "server_ms": 2257.755,
               "verdicts": 3
             }
           ]
@@ -45,9 +343,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 4.6,
               "tries": 1,
-              "server_ms": 2171.116,
+              "server_ms": 2170.635,
               "verdicts": 3
             }
           ]
@@ -57,9 +355,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.6,
+              "seconds": 2.9,
               "tries": 1,
-              "server_ms": 2312.285,
+              "server_ms": 2298.025,
               "verdicts": 3
             }
           ]
@@ -69,9 +367,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.6,
+              "seconds": 2.8,
               "tries": 1,
-              "server_ms": 2302.943,
+              "server_ms": 2298.606,
               "verdicts": 3
             }
           ]
@@ -81,9 +379,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.0,
+              "seconds": 3.3,
               "tries": 1,
-              "server_ms": 2655.314,
+              "server_ms": 2676.242,
               "verdicts": 3
             }
           ]
@@ -93,9 +391,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.6,
+              "seconds": 2.8,
               "tries": 1,
-              "server_ms": 2241.058,
+              "server_ms": 2244.774,
               "verdicts": 3
             }
           ]
@@ -105,9 +403,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.8,
+              "seconds": 3.1,
               "tries": 1,
-              "server_ms": 2518.025,
+              "server_ms": 2511.276,
               "verdicts": 3
             }
           ]
@@ -117,9 +415,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.0,
+              "seconds": 3.1,
               "tries": 1,
-              "server_ms": 2699.36,
+              "server_ms": 2688.107,
               "verdicts": 3
             }
           ]
@@ -129,9 +427,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.8,
+              "seconds": 2.8,
               "tries": 1,
-              "server_ms": 3394.743,
+              "server_ms": 2348.457,
               "verdicts": 3
             }
           ]
@@ -141,9 +439,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2211.563,
+              "server_ms": 2186.469,
               "verdicts": 3
             }
           ]
@@ -153,9 +451,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2128.188,
+              "server_ms": 2069.902,
               "verdicts": 3
             }
           ]
@@ -165,9 +463,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 4.3,
               "tries": 1,
-              "server_ms": 1752.718,
+              "server_ms": 1737.776,
               "verdicts": 3
             }
           ]
@@ -182,9 +480,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.0,
+              "seconds": 3.3,
               "tries": 1,
-              "server_ms": 2722.564,
+              "server_ms": 2703.152,
               "verdicts": 4
             }
           ]
@@ -196,7 +494,7 @@
             {
               "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2348.346,
+              "server_ms": 2296.597,
               "verdicts": 3
             }
           ]
@@ -206,9 +504,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 4.1,
               "tries": 1,
-              "server_ms": 2053.446,
+              "server_ms": 2052.508,
               "verdicts": 3
             }
           ]
@@ -218,9 +516,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.0,
+              "seconds": 3.1,
               "tries": 1,
-              "server_ms": 2571.192,
+              "server_ms": 2590.422,
               "verdicts": 3
             }
           ]
@@ -230,9 +528,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.3,
+              "seconds": 3.2,
               "tries": 1,
-              "server_ms": 2755.009,
+              "server_ms": 2741.753,
               "verdicts": 3
             }
           ]
@@ -242,9 +540,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.9,
+              "seconds": 3.0,
               "tries": 1,
-              "server_ms": 2532.958,
+              "server_ms": 2506.766,
               "verdicts": 3
             }
           ]
@@ -254,9 +552,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 2.4,
               "tries": 1,
-              "server_ms": 1788.543,
+              "server_ms": 1795.564,
               "verdicts": 3
             }
           ]
@@ -271,9 +569,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.3,
+              "seconds": 3.8,
               "tries": 1,
-              "server_ms": 1927.892,
+              "server_ms": 1889.421,
               "verdicts": 3
             }
           ]
@@ -283,9 +581,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 2.5,
               "tries": 1,
-              "server_ms": 1794.219,
+              "server_ms": 1807.443,
               "verdicts": 3
             }
           ]
@@ -295,9 +593,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2092.443,
+              "server_ms": 2072.516,
               "verdicts": 3
             }
           ]
@@ -307,9 +605,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 2.6,
               "tries": 1,
-              "server_ms": 2107.949,
+              "server_ms": 2088.676,
               "verdicts": 3
             }
           ]
@@ -319,9 +617,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 2.6,
               "tries": 1,
-              "server_ms": 2111.311,
+              "server_ms": 2114.62,
               "verdicts": 3
             }
           ]
@@ -336,9 +634,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 4.1,
               "tries": 1,
-              "server_ms": 2208.308,
+              "server_ms": 2164.362,
               "verdicts": 3
             }
           ]
@@ -348,9 +646,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 2.3,
               "tries": 1,
-              "server_ms": 1756.587,
+              "server_ms": 1737.039,
               "verdicts": 3
             }
           ]
@@ -362,7 +660,7 @@
             {
               "seconds": 2.5,
               "tries": 1,
-              "server_ms": 2061.285,
+              "server_ms": 2029.628,
               "verdicts": 3
             }
           ]
@@ -372,9 +670,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.0,
+              "seconds": 2.2,
               "tries": 1,
-              "server_ms": 1707.04,
+              "server_ms": 1732.733,
               "verdicts": 3
             }
           ]
@@ -384,9 +682,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.0,
+              "seconds": 3.2,
               "tries": 1,
-              "server_ms": 1536.32,
+              "server_ms": 1477.561,
               "verdicts": 3
             }
           ]
@@ -401,9 +699,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.2,
+              "seconds": 2.3,
               "tries": 1,
-              "server_ms": 1894.076,
+              "server_ms": 1842.206,
               "verdicts": 3
             }
           ]
@@ -413,9 +711,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 2.3,
               "tries": 1,
-              "server_ms": 1786.033,
+              "server_ms": 1784.592,
               "verdicts": 3
             }
           ]
@@ -425,9 +723,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.3,
+              "seconds": 2.6,
               "tries": 1,
-              "server_ms": 2027.533,
+              "server_ms": 2031.288,
               "verdicts": 3
             }
           ]
@@ -437,9 +735,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.6,
               "tries": 1,
-              "server_ms": 2120.458,
+              "server_ms": 2111.644,
               "verdicts": 3
             }
           ]
@@ -449,9 +747,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2113.083,
+              "server_ms": 2113.701,
               "verdicts": 3
             }
           ]
@@ -466,9 +764,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 2.2,
               "tries": 1,
-              "server_ms": 1803.047,
+              "server_ms": 1753.704,
               "verdicts": 3
             }
           ]
@@ -478,9 +776,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.1,
+              "seconds": 2.3,
               "tries": 1,
-              "server_ms": 1778.786,
+              "server_ms": 1796.365,
               "verdicts": 3
             }
           ]
@@ -490,9 +788,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.3,
+              "seconds": 2.5,
               "tries": 1,
-              "server_ms": 2043.872,
+              "server_ms": 2017.747,
               "verdicts": 3
             }
           ]
@@ -502,9 +800,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2085.399,
+              "server_ms": 2069.97,
               "verdicts": 3
             }
           ]
@@ -514,9 +812,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.3,
+              "seconds": 2.5,
               "tries": 1,
-              "server_ms": 2032.417,
+              "server_ms": 2017.55,
               "verdicts": 3
             }
           ]
@@ -526,9 +824,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.0,
+              "seconds": 2.2,
               "tries": 1,
-              "server_ms": 1694.456,
+              "server_ms": 1704.733,
               "verdicts": 3
             }
           ]
@@ -538,9 +836,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2223.168,
+              "server_ms": 2205.999,
               "verdicts": 3
             }
           ]
@@ -550,9 +848,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 1.7,
+              "seconds": 2.3,
               "tries": 1,
-              "server_ms": 1414.858,
+              "server_ms": 1412.226,
               "verdicts": 3
             }
           ]
@@ -567,9 +865,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.2,
+              "seconds": 3.8,
               "tries": 1,
-              "server_ms": 1906.367,
+              "server_ms": 1876.366,
               "verdicts": 3
             }
           ]
@@ -579,9 +877,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.2,
+              "seconds": 2.4,
               "tries": 1,
-              "server_ms": 1849.076,
+              "server_ms": 1812.091,
               "verdicts": 3
             }
           ]
@@ -591,9 +889,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.2,
+              "seconds": 2.4,
               "tries": 1,
-              "server_ms": 1856.719,
+              "server_ms": 1843.439,
               "verdicts": 3
             }
           ]
@@ -603,9 +901,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.3,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 1999.141,
+              "server_ms": 1988.197,
               "verdicts": 3
             }
           ]
@@ -615,9 +913,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.4,
+              "seconds": 2.5,
               "tries": 1,
-              "server_ms": 2053.173,
+              "server_ms": 2012.264,
               "verdicts": 3
             }
           ]
@@ -627,9 +925,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2037.96,
+              "server_ms": 2012.628,
               "verdicts": 3
             }
           ]
@@ -639,9 +937,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.6,
+              "seconds": 3.0,
               "tries": 1,
-              "server_ms": 2261.353,
+              "server_ms": 2243.478,
               "verdicts": 3
             }
           ]
@@ -651,9 +949,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.6,
+              "seconds": 2.8,
               "tries": 1,
-              "server_ms": 2319.366,
+              "server_ms": 2307.319,
               "verdicts": 3
             }
           ]
@@ -668,9 +966,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.3,
+              "seconds": 2.4,
               "tries": 1,
-              "server_ms": 1914.768,
+              "server_ms": 1887.096,
               "verdicts": 3
             }
           ]
@@ -682,7 +980,7 @@
             {
               "seconds": 2.3,
               "tries": 1,
-              "server_ms": 1800.194,
+              "server_ms": 1766.483,
               "verdicts": 3
             }
           ]
@@ -692,9 +990,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.9,
+              "seconds": 2.6,
               "tries": 1,
-              "server_ms": 2087.974,
+              "server_ms": 2063.551,
               "verdicts": 3
             }
           ]
@@ -704,9 +1002,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.0,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2055.584,
+              "server_ms": 2050.01,
               "verdicts": 3
             }
           ]
@@ -716,9 +1014,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.8,
+              "seconds": 2.6,
               "tries": 1,
-              "server_ms": 2034.148,
+              "server_ms": 2023.889,
               "verdicts": 3
             }
           ]
@@ -728,9 +1026,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 3.1,
+              "seconds": 2.9,
               "tries": 1,
-              "server_ms": 2259.322,
+              "server_ms": 2261.332,
               "verdicts": 3
             }
           ]
@@ -740,9 +1038,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2228.077,
+              "server_ms": 2182.774,
               "verdicts": 3
             }
           ]
@@ -752,9 +1050,9 @@
           "encode": "copy",
           "queries": [
             {
-              "seconds": 2.5,
+              "seconds": 2.7,
               "tries": 1,
-              "server_ms": 2201.764,
+              "server_ms": 2197.358,
               "verdicts": 3
             }
           ]
@@ -762,5 +1060,5 @@
       ]
     }
   ],
-  "seconds": 837
+  "seconds": 937
 }

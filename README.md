@@ -1188,13 +1188,17 @@ that matters for QA. Twelve clips: a direction, not a measurement.
 | **serving, whole clips** | dev | **11.6 min** | 657 s load once, then 12 answers in 37 s |
 | **serving, 4 s chunks** (83) | dev | **14.0 min** | 689 s load, then 59 answers in 148 s (the clean, resumed run) |
 | **serving, 10 s chunks** (51) | dev | **14.5 min** | 739 s load, then 51 answers in 128 s |
+| serving, whole clips, rerun 2026-10-28 | dev | 12.9 min | 731 s load, then 12 answers in 39 s |
+| serving, 4 s chunks, rerun 2026-10-28 (83) | dev | 15.6 min | 706 s load, then all 83 answers in 229 s, one agent, no retries |
+| serving, 10 s chunks, rerun 2026-10-28 (51) | dev | 15.5 min | 789 s load, then 51 answers in 139 s |
 
 Once loaded, a video costs ~3 s whole, ~11 s as 10 s chunks and ~20 s as 4 s chunks,
 against a fresh 8–27 minutes in batch, so the gap widens with every video added. Two
 costs the table hides: the load ranged from 657 s to 1,385 s across five agents, and the
 4 s chunks took three agents to finish — the hang and the short-chunk crash added ~105
-minutes, ~2 h in all. Both causes are fixed in `sweep_serve.py`, but on dev today one bad
-query still loses the agent and its load.
+minutes, ~2 h in all. On 2026-10-28, after the platform fixes, all three sweeps ran
+start to finish on one agent each and returned byte-identical answers to 10-26's, so the
+scores above stand. A bad clip now fails only its own query (400) instead of the agent.
 
 ## Lessons learned (as of 2026-08-12, measured on dev)
 
