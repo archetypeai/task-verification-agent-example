@@ -25,6 +25,13 @@ that was never fitted. [Full results below.](#results--12-clips-and-one-finding-
 > It loads the agent once and answers each clip in ~3 s instead of a ~8-minute run:
 > [Stage 6](#stage-6--serve-load-once-one-query-per-clip-dev).
 
+> **Agent Lifecycle 2.0:** the scripts run on projects, packages, deployments and
+> sessions; bundles and instances are being removed from the platform. A run's
+> `max_frames`, `size` and `max_new_tokens` are now set on a copy of `tva` in the
+> project `TVA o-ring`, one copy per setting (`tva-f64-s224-t5760`), and each clip
+> is a session on that copy's deployment. The results below were measured with
+> bundles. What changed, and how to move your own scripts: [MIGRATION.md](MIGRATION.md).
+
 TVA V1 is zero-shot. The design doc states there are no build-time optimization
 steps, and the platform agrees: the `tva` blueprint pins its own models
 (`newton-fusion-1-0` and `whisper-base` on prod; `newton-fusion:1.0` and
@@ -55,9 +62,9 @@ source:                                  source:
 ```
 
 MGA takes **no text input at all** (`text_extensions: []`) and gets its instruction
-from a bundle *value*, so the instruction is fixed for the life of a bundle. TVA
-accepts a `.txt` and routes it `source.text -> prepare.in` through a dedicated
-`PrepareSOPNode` — so every run carries its own procedure and **one bundle serves
+from a blueprint *value*, so the instruction is fixed for the life of the agent.
+TVA accepts a `.txt` and routes it `source.text -> prepare.in` through a dedicated
+`PrepareSOPNode` — so every run carries its own procedure and **one agent serves
 every SOP.** That single edge turns "describe this video" into "check this video
 against my procedure", and most of this README is about the consequences.
 
@@ -77,15 +84,17 @@ ATAI_API_KEY=<API key>
 ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
 ```
 
-Upload video + SOP → create a bundle → run → stream `/logs` → download → print the
-report and score it. Budget **20-30 minutes**, not the ~13 of job time: a run is
+Upload video + SOP → find or make the agent for this setting (a copy of `tva` with
+the values set, its package and a batch deployment, once per setting) → open a
+session → poll it → download → print the report and score it. Budget **20-30 minutes**, not the ~13 of job time: a run is
 754-1614 s once it starts (of which ~7 min is model loading, on every run, never
 cached) and **the queue is not included in that.** On dev, where these figures were
 measured, one GPU was shared across orgs; observed waits ranged from 12 s to 796 s,
-and one 41-minute wall clock for a 17-minute job. If nothing has happened for ten minutes, it is queued, not hung —
-`job.admitted` in `/logs` tells you which.
+and one 41-minute wall clock for a 17-minute job (measured with bundles). If nothing
+has happened for ten minutes, it is queued, not hung: the session stays `pending`
+until it is dispatched.
 
-To check every clip instead of one — same bundle, same SOP, one run per video:
+To check every clip instead of one — same agent, same SOP, one session per video:
 
 ```sh
 python3 sweep.py --list                    # what is on disk, with labels. No API calls.
@@ -138,7 +147,13 @@ itself. **The runs live on the platform, not in your client** — see
 ```sh
 python3 sweep.py --collect          # harvest finished runs after a disconnect
 python3 sweep.py --cancel-all       # stop what you are not waiting for
+python3 cleanup.py --yes            # delete the sessions, deployments and packages
 ```
+
+`state/lifecycle.json` (gitignored) records the project, each setting's copy,
+package and deployments, and every session the moment it is opened: that is what
+`--collect`, `--cancel-all` and `cleanup.py` walk. It belongs to one deployment of the
+platform and one account; to run against another, move `state/` aside.
 
 Every script here is **stdlib-only**: no virtualenv, no `requirements.txt`, no
 install step. Three of the four commands above touch no API at all, and scoring
@@ -188,7 +203,7 @@ second is the first made a valid Kubernetes name: atai_core's `mount_name()` low
 artifact key and folds everything else to `-`, and its test asserts exactly this mapping.
 It is the modelpack `modelpacks/models/newton-fusion/1.0.0/35b-a3b-fp8-base` (Newton-Fusion
 35B-A3B, fp8), the only version there, renamed when every model became a DVC-pinned
-modelpack in early October (PLDEV-2255). Whether its weights are byte-identical to what
+modelpack in early October. Whether its weights are byte-identical to what
 the August blueprint loaded cannot be checked: that checkpoint was pinned nowhere we can
 compare. So the step-3 regression below is tied to the **republish** — transcriber, node
 graph and model packaging changed together — not proven to come from the model. It is
@@ -582,8 +597,9 @@ Two consequences worth knowing:
   is new every time. That is fine — uniqueness makes the clobber impossible by
   construction rather than defending against it — but a 12-clip sweep now re-uploads
   **80 MB** of video. At ~0.8 s per clip against a ~1000 s run, the time cost is noise.
-- **Uploads accumulate.** There is no file-cleanup endpoint in this API (only
-  `/cancel` for instances), so every sweep leaves its objects behind.
+- **Uploads accumulate.** There is no file-cleanup endpoint in this API, so every
+  sweep leaves its objects behind. (`cleanup.py` deletes sessions, deployments and
+  packages, not files.)
 
 `--pair-sop` keeps the clip-stem-only form for reproducing the platform team's literal
 recommendation, plus the same suffix. [`sop/paired/`](sop/paired) holds one copy per
@@ -614,37 +630,44 @@ collide.
 
 ### Where the SOP lives on the wire — and where it does not
 
-**Not in the bundle.** The bundle carries only `values`:
+**Not in the agent.** The values live on the project's copy of `tva`, set when it is
+copied, one copy per setting:
 
 ```json
-{"id":"bnd_3j8z…","values":{"max_frames":64,"max_new_tokens":2048},"status":"ready"}
+POST /agents/blueprints/tva/copy
+{"project_id":"prj_…","blueprint_key":"tva-f64-s224-t5760",
+ "overrides":{"values":{"max_frames":64,"max_new_tokens":5760,"size":224}}}
 ```
 
-The SOP rides with the **run**, as a source connector input:
+The package and the batch deployment built from it carry no values at all. The SOP
+rides with the **session**, as a source connector input:
 
 ```json
-{"source":[{"type":"file","id":"1_pass_2_pass_3_pass_A.mp4","format":"mp4"},
-           {"type":"file","id":"sop_1_pass_2_pass_3_pass_A.txt","format":"txt"}]}
+POST /agents/sessions
+{"deployment_id":"dpl_…",
+ "connectors":{"source":[{"type":"file","id":"1_pass_2_pass_3_pass_A.mp4","format":"mp4"},
+                         {"type":"file","id":"sop_1_pass_2_pass_3_pass_A.txt","format":"txt"}]}}
 ```
 
-So one bundle is reusable across every SOP, and **`MultiModalSource` routes the two
-inputs by their `format` field, not by position** — order does not matter. Looking
-for the SOP in the bundle and not finding it is the expected first confusion here.
+So one deployment serves every SOP, and **`MultiModalSource` routes the two inputs
+by their `format` field, not by position** — order does not matter. Looking for the
+SOP on the blueprint and not finding it is the expected first confusion here.
 
-**This is worth exploiting, not just knowing.** Because nothing that varies per
-clip lives in the bundle, `sweep.py` creates **one bundle and reuses it for every
-run**:
+**This is worth exploiting, not just knowing.** Because nothing that varies per clip
+lives in the agent, every script reuses **one copy, package and deployment per
+setting** — across runs, sweeps and scripts — and opens a session per clip:
 
 ```
-SOP uploaded as oring.txt
-bundle bnd_2rr5jj… (reused for all 12 runs)
+agent tva-f64-s224-t5760: copy blp_…, package pkg_…, deployment dpl_… (reused for all 12 runs)
 
 [1/12] 1_fail_2_pass_3_fail_A  (1=FAIL/2=pass/3=FAIL)
+  session_id=ses_…
 ```
 
-An earlier version created a bundle per clip — twelve identical bundles differing
-in nothing but their id. If you find yourself creating a bundle per input, that is
-a sign you have put something in `values` that belongs in a connector.
+With bundles, an earlier version created a bundle per clip — twelve identical
+bundles differing in nothing but their id. If you find yourself making a copy or a
+deployment per input, that is a sign you have put something in `values` that belongs
+in a connector.
 
 ## Stage 3 — Configure
 
@@ -663,9 +686,19 @@ are the current prod blueprint's; the "highest tried" column is from dev.
 | `min_temporal_similarity_threshold` | not sent (0.0) | — | **New on prod.** Collapses runs of near-identical frames; `0.0` disables it. Untested here. |
 | `prompt` | **does not exist** | — | Not a defect to work around, just absent. The SOP replaces it. |
 
-The preflight reads the blueprint document rather than hardcoding key names, so an
-unwired value is caught before spending GPU, and every value is printed next to the
-blueprint's current default — which has changed under this example more than once.
+These values go on the project's copy of `tva` (`overrides.values`), not on a
+package or a session, which take none: **each setting is its own copy**, keyed
+`tva-f<frames>-s<size>-t<budget>`, made the first time it runs and reused after. A
+copy with no overrides would run at the blueprint's own defaults, which today include
+`max_new_tokens` 8192 — the budget that looped inside `<think>` and returned
+`results: []` on a hard clip here ([Lesson 4](#4-bigger-budgets-do-not-buy-answers)).
+A copy refuses a key the blueprint does not declare with a `400`, but accepts one that
+is declared and never referenced.
+
+The preflight reads the document of the blueprint the copy is made from rather than
+hardcoding key names, so an unwired value is caught before spending GPU, and every
+value is printed next to the blueprint's current default — which has changed under
+this example more than once.
 From a dev run in August:
 
 ```
@@ -685,7 +718,7 @@ python3 sweep.py --clips 1_pass_2_pass_3_fail_A 1_fail_2_pass_3_pass_A
 python3 sweep.py --all --submit-all           # all twelve — see Quick start
 ```
 
-Ctrl-C cancels the in-flight run rather than orphaning it on the shared GPU.
+Ctrl-C cancels the in-flight session rather than orphaning it on the shared GPU.
 
 **Anything long, run it with `--background`.** `run_tva_example.py`, `sweep.py`,
 `iterate_sop.py` and `sweep_serve.py` all take it: the command relaunches itself under
@@ -699,8 +732,8 @@ python3 sweep_serve.py --all --chunk 4 --background
 #   stop:    kill 28680      # cleans up like Ctrl-C
 ```
 
-`kill <pid>` is delivered as Ctrl-C, so a sweep still cancels its run or its serving
-agent on the way out. `--background other.log` picks the log file.
+`kill <pid>` is delivered as Ctrl-C, so a sweep still cancels its session, or its
+serving session and deployment, on the way out. `--background other.log` picks the log file.
 
 ### If the client dies, the runs do not
 
@@ -712,9 +745,10 @@ python3 sweep.py --collect                     # harvest every finished run
 python3 sweep.py --cancel-all                  # an abandoned run holds the GPU
 ```
 
-`--collect` is safe to repeat mid-sweep: it skips what is on disk, ignores runs still
-in flight, and asks for results regardless of the instance `status`, which is not a
-reliable terminality signal.
+`--collect` is safe to repeat mid-sweep: it walks the sessions recorded in
+`state/lifecycle.json` (each is recorded the moment it is opened), skips what is on
+disk, ignores sessions still in flight, and reports failed or cancelled ones as never
+going to produce output. `--setting tva-f64-s224-t5760` restricts it to one setting.
 
 ### Cold start dominates, and nothing is cached
 
@@ -944,26 +978,31 @@ to notice unaided.
 python3 sweep_serve.py --clips 1_pass_2_pass_3_pass_A --repeat 3 --out-dir eval_probe
 python3 sweep_serve.py --all --background      # every clip on one loaded agent; log logs/sweep_serve.log
 python3 sweep_serve.py --all --keep            # leave it loaded…
-python3 sweep_serve.py --all --agent agt_… --fresh   # …and reuse it: no load at all
+python3 sweep_serve.py --all --session ses_… --fresh   # …and reuse it: no load at all
 python3 evaluate.py eval_serving/tva-output-*.json
 ```
 
 Stages 4 and 5 run in **batch**: upload, run, poll, download, and every run downloads
-and loads the models again. **Agent serving** runs the same `tva` bundle with
-`{"mode": "serving"}`: the agent loads once and then answers
-`POST /agents/instances/{id}/query` for each clip in a single round trip, with no
+and loads the models again. **Agent serving** deploys the same setting's package as
+`serving` and opens one session on it: the agent loads once and then answers
+`POST /agents/sessions/{id}/query` for each clip in a single round trip, with no
 upload, queue or polling. Twelve clips cost one load and twelve answers instead of
-twelve loads.
+twelve loads. At the end `sweep_serve.py` cancels the session and stops and deletes
+the serving deployment, which is what holds the GPU worker; `--keep` leaves both
+running for `--session`, and `cleanup.py` removes them later.
+
+The measurements below were made with bundles, on a serving *instance* of the `tva`
+bundle; the query and its answer are unchanged.
 
 > **Agent serving is available on dev only, as of 2026-10-28.** Not on prod or
 > staging yet: batch (Stages 4 and 5) is what prod offers.
 
-It came with the GPU-backed agents milestone (PLDEV-2343, PLDEV-2195), and its limits
-are today's:
+It came with GPU-backed agents, and its limits as measured then:
 
 - **One GPU agent at a time on dev.** A second one is refused while the first runs, so
-  `sweep_serve.py` cancels its agent on exit, Ctrl-C included, unless `--keep`. An
-  agent with no query for 20 minutes is released.
+  `sweep_serve.py` releases its agent on exit, Ctrl-C included, unless `--keep`. An
+  agent with no query for 20 minutes was released; a serving session now closes
+  after 30 idle minutes, the deployment's default.
 - **The video goes inline.** A served agent takes no data-service file ids yet:
   `{"model": "tv", "query": "<SOP>", "file_ids": ["base64:<mp4>"]}`, the request
   shape of atai_core's `tv` modelpack. The SOP travels in `query`, so one agent still
@@ -973,12 +1012,12 @@ are today's:
   (gitignored) at 640×480, CRF 28, no audio: 0.6–1.4 MB, 0.74–1.75 MiB as a request.
   TVA samples 64 frames at 224 px anyway, but the bytes differ from batch's.
 - **Each query has a 58 s budget.** The first query to a fresh agent used to 504; since
-  PLDEV-2432 the agent warms its models up before it reports `running`.
+  then the agent warms its models up before it reports `running`.
   `sweep_serve.py` still retries 5xx until the load deadline.
-- **`/logs` shows the load as it happens** (since 2026-10-28, PLDEV-2479): *"Still
+- **An instance's `/logs` showed the load as it happened** (from 2026-10-28): *"Still
   loading newton-fusion-1-0 model after 4min0s"* once a minute, then the warm-up and
-  whisper's load. `sweep_serve.py` prints it. Before, the load was a silent wait for
-  `status: running`.
+  whisper's load. A session has no `/logs`, only lifecycle `/events`, so the load is
+  again a wait for `status: running`; `sweep_serve.py` prints the events.
 - **A query can hang, and a hung query does not keep the agent alive.** In the first
   `--chunk 4` sweep (2026-10-26), one query never returned. The agent saw nothing for 20
   minutes and was released (`completed`, exactly 20 min after the last answer), and every
@@ -990,7 +1029,7 @@ are today's:
   sweep (2026-10-26), a 1.1 s tail chunk (35 frames, below the blueprint's 64-frame
   `max_frames`) got `409 … the agent's graph failed: video preprocessing failed`, and the
   agent was gone. A 40-frame tail had earlier been answered, but in 24.6 s against
-  ~2.5 s. PLDEV-2480 fixed both: a clip with an odd frame count is padded, and a clip the
+  ~2.5 s. Both were then fixed: a clip with an odd frame count is padded, and a clip the
   agent cannot read gets a `400` naming the problem while the agent stays loaded
   (checked with MGA's agent on dev, 2026-10-28: a 35-frame clip answered, an
   audio-only mp4 and random bytes got 400s, and the next query answered).
@@ -1266,7 +1305,8 @@ figure gathered without checking for empty results measures the easy half of the
 
 `status: ready`, HTTP `202`, `running` → `completed`, and `results: []`. No error field.
 A 3-step SOP can return 21 rows and the pipeline will not notice, though it built the
-instruction from the step count. **`/logs` is the only place the truth appears.**
+instruction from the step count. **With bundles, `/logs` was the only place the truth
+appeared; a session has no `/logs`, so count the verdicts.**
 
 ### 7. A preflight built on a measured constant goes stale in the worst direction
 
@@ -1332,7 +1372,8 @@ small object to resolve — but it has not been ruled out.
 
 ### Things that look like success and are not
 
-Three distinct failures all report `job.completed`, and none sets an error field:
+Measured with bundles: three distinct failures all reported `job.completed`, and none
+set an error field:
 
 | what happened | how it looks | how to tell |
 |---|---|---|
@@ -1340,22 +1381,28 @@ Three distinct failures all report `job.completed`, and none sets an error field
 | the video never downloaded | `results: []`, an ERROR row | read `/logs` for ERROR |
 | the parser matched nothing | `results: []`, **no WARN at all** | absence of both |
 
-- **So `/logs` is the only place the truth appears.** The bundle returns
-  `status: ready`, the run returns `202`, the instance `status` says `running` then
-  `completed`, and `/results` is simply empty. A 44-byte empty result is committed as
+- **So `/logs` was the only place the truth appeared.** The bundle returned
+  `status: ready`, the run `202`, the instance `status` said `running` then
+  `completed`, and `/results` was simply empty. **A session has no `/logs`**: only
+  lifecycle `/events` and `/results`. The session's own `status` and `error` say
+  whether it failed; an empty run still ends `completed`, so the scripts count the
+  verdicts (`tva_api.empty_output()`), and the WARN and "no WARN" rows above can no
+  longer be told apart. A 44-byte empty result is committed as
   [`reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json`](reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json).
-- **The instance `status` field is not a terminality signal.** MGA saw `running` persist
-  20+ minutes after a pod died with exit=1.
+- **The instance `status` field was not a terminality signal.** MGA saw `running`
+  persist 20+ minutes after a pod died with exit=1. The scripts poll a session's
+  `status` instead; whether it has the same flaw is not yet measured.
 - **`is_valid: true` is not proof the object landed.** It is returned alongside a
   `file_id` regardless, so read the file back before spending a run.
-- **Values are accepted whether or not they do anything.** A key absent from the
-  blueprint's `values`, or present but never referenced as `${values.<key>}`, is stored
-  on the bundle and silently ignored.
+- **Values are accepted whether or not they do anything.** A bundle stored a key
+  absent from the blueprint's `values`, or present but never referenced as
+  `${values.<key>}`, and silently ignored it. A copy now refuses the first with a
+  `400`, but still accepts the second.
 
 ### Queue and timing
 
-- **`job.admitted`'s queue figure is not the real wait, and the real wait can be
-  invisible.** One run reported `Job scheduled after 32s in queue` and then did not
+- **`job.admitted`'s queue figure was not the real wait, and the real wait can be
+  invisible** (measured with bundles). One run reported `Job scheduled after 32s in queue` and then did not
   start a pod for **11+ minutes**, with no job of ours holding the GPU. `GET
   /agents/instances` is scoped to your org, so another org's job can block you with
   nothing in your view to explain it. **Judge progress from `job.started`.**
@@ -1373,11 +1420,18 @@ Three distinct failures all report `job.completed`, and none sets an error field
   `/api`) files live at `/files`; on the legacy `api.*` hosts they lived at
   `/v0.5/files`. The wrong one is a bare 404 with no body. (On the legacy hosts, a
   prod key on dev returned 401.)
-- **The bundle endpoint is plural.** `POST /agents/bundle` → 404. The RED and OSM
-  example repos still use the singular form.
-- **Starting a run returns 202, not 201.**
-- **Poll `/logs`, not `/events`.** `/events` carries only "run started" and "dispatched
-  to JOS".
+- **A package, a deployment and a batch session take no values.** Set them on the
+  blueprint copy (`POST /agents/blueprints/tva/copy` with `overrides.values`). A
+  batch session given `values` is refused with a `422`. A serving session accepts
+  `values`, but only for a node's session fields (for TVA, the fusion model's
+  `max_new_tokens`); `sweep_serve.py` uses the copy's anyway, so serving and batch
+  run the same setting.
+- **A session has `/events` and `/results`, not `/logs`.** `/events` carries the
+  session's lifecycle (opened, dispatched, failed with a reason), not model-load
+  timings or the parser's warnings.
+- **Bundle-era, for reference:** the bundle endpoint was plural (`POST /agents/bundle`
+  → 404), starting a run returned 202, and `/logs` rather than `/events` carried the
+  run's progress.
 
 ## Where the deployment diverges from the design doc
 
@@ -1499,21 +1553,22 @@ Ordered by value, and every one of them is backed by a run in this repo.
     Every clip here is 5–11 MB, so serving them means re-encoding (or chunking) first,
     and a re-encoded clip is not the input batch saw: verdicts matched on `pass_A`, but
     timestamps and reasons did not. Batch and serving should be comparable on the same
-    bytes. (A serving agent's `/logs` was empty during its load; since 2026-10-28 it
-    shows the load as it happens.)
+    bytes.
 
 ## Repo layout
 
 | Path | What it is |
 |---|---|
-| `run_tva_example.py` | **Start here.** One clip end to end: upload video + SOP → bundle → run → watch `/logs` → download → print → score. `--dry-run`, `--show` and `--repro-empty --offline` need no API key. |
+| `run_tva_example.py` | **Start here.** One clip end to end: upload video + SOP → the setting's agent → a batch session → poll it → download → print → score. `--dry-run`, `--show` and `--repro-empty --offline` need no API key. |
 | `iterate_sop.py` | **SOP iteration.** Derives the platform file ids from both the clip and the SOP (`<clip>-<sop>.mp4` + `.txt`), so variants cannot overwrite each other and an id says which SOP produced it. `--compare` scores every collected variant offline. |
-| `sweep.py` | Batch over many clips, one bundle. `--submit-all` claims queue slots up front, `--fresh` re-runs what is already on disk, `--collect` harvests after a disconnect, `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
-| `sweep_serve.py` | **Stage 6.** The sweep over agent serving (dev): one loaded agent, one `/query` per clip, each clip re-encoded under the 2 MiB request cap. `--repeat` checks determinism, `--keep`/`--agent` reuse a loaded agent, `--chunk`/`--overlap` send each clip as shorter videos, `--dry-run` is offline. |
+| `sweep.py` | Batch over many clips, one deployment, a session per clip. `--submit-all` claims queue slots up front, `--fresh` re-runs what is already on disk, `--collect` harvests after a disconnect (`--setting` for one setting), `--cancel-all` frees the GPU. `--list` and `--dry-run` are offline. |
+| `sweep_serve.py` | **Stage 6.** The sweep over agent serving: one serving deployment and session, one `/query` per clip, each clip re-encoded under the 2 MiB request cap. `--repeat` checks determinism, `--keep`/`--session` reuse a loaded session, `--chunk`/`--overlap` send each clip as shorter videos, `--dry-run` is offline. |
+| `cleanup.py` | Deletes the sessions, deployments and packages recorded in `state/`; lists them first, `--yes` to delete. The project and its copies of `tva` stay. |
+| `tva_project.py` | The project `TVA o-ring`, a copy of `tva` per setting and its package and deployments, found or made and reused; every session recorded in `state/lifecycle.json` (gitignored). |
 | `merge_chunks.py` | Stage 6, chunking: merges `sweep_serve.py --chunk` answers into one verdict per step under four rules and scores each. Offline. |
 | `background.py` | `--background` for the long scripts: `nohup`, `caffeinate -i -w`, a log in `logs/` (gitignored), and `kill` handled like Ctrl-C. Adapted from the LARCO quickstart's. |
 | `evaluate.py` | Offline scorer: per-step accuracy, confusion, FAILED-vs-MISSING split, interval sanity. No API key. |
-| `tva_api.py` | Shared stdlib client — endpoint-aware files prefix (`files_root()`), streaming upload, idempotent re-upload, `/logs` polling, wired-value and token preflight. |
+| `tva_api.py` | Shared stdlib client — endpoint-aware files prefix (`files_root()`), streaming upload, idempotent re-upload, copies, packages, deployments and sessions, wired-value and token preflight. |
 | `sop/oring-numbered.txt` | **The baseline SOP**, and the default for every script. One step per line. |
 | `sop/oring.txt` | The same steps without `Step N:` prefixes — the design doc's bare format, kept for the 2×2 comparison. |
 | `sop/oring-strict.txt` | Adds status instructions and returns **zero rows** — the worked example of an SOP competing with the parser. |
@@ -1531,6 +1586,7 @@ Ordered by value, and every one of them is backed by a run in this repo.
 | `eval_probe/` | The second serving probe of `pass_A` (`sweep_serve.py --repeat 3`): same rows as the first, on a fresh agent. |
 | `data/clips-serving/` | The clips re-encoded, or cut into chunks, to fit the serving request cap. Gitignored — `sweep_serve.py` regenerates them. |
 | `eval_out/` | Where `sweep.py` writes by default. Gitignored — regenerable. |
+| `MIGRATION.md` | From bundles and instances to projects, packages, deployments and sessions: what changed here, and how to move your own scripts. |
 | `docs/` | The TVA design doc this example implements. **Gitignored — internal.** |
 
 ## Not yet built
