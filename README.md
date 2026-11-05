@@ -170,7 +170,7 @@ Checked against prod on 2026-10-26. Two things changed; the client handles both.
 **The endpoint layout.** The `platform.*` endpoints end in `/api`, and the files API
 lost its version prefix:
 
-| | legacy (`https://api.dev.u1.archetypeai.app`) | prod (`https://platform.u1.archetypeai.app/api`) |
+| | legacy `api.*` hosts | prod (`https://platform.u1.archetypeai.app/api`) |
 |---|---|---|
 | agents | `<endpoint>/agents/…` | `<endpoint>/agents/…` |
 | files | `<endpoint>/v0.5/files/…` | `<endpoint>/files/…` — `/v0.5` is a 404 |
