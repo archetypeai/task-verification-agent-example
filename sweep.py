@@ -26,8 +26,12 @@ Outputs land in eval_out/ as one JSON file per clip, then:
 WHY A SEPARATE SCRIPT from run_tva_example.py: that one is the readable
 end-to-end path for a single clip and prints everything. This one is the batch
 path — it keeps going when a clip fails, records what happened, and never leaves
-a run orphaned on the GPU. If you interrupt it, it cancels the in-flight run
+a run orphaned on the GPU. If you interrupt it, it cancels the in-flight session
 before exiting, because an abandoned run blocks everyone else on dev.
+
+Every clip runs as one batch session on ONE deployment for the sweep's setting:
+the project's copy of `tva` at --max-frames/--size/--max-new-tokens, its package
+and its batch deployment, made once per setting and reused (tva_project.py).
 """
 from __future__ import annotations
 
@@ -36,11 +40,11 @@ import glob
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 
 import tva_api as api
+import tva_project as project
 from background import add_background_flag, maybe_detach
 from run_tva_example import (BLUEPRINT_DEFAULT, DEFAULT_SOP_PATH, load_sop,
                             pair_names, parse_ground_truth, resolve_clip, sop_text,
@@ -87,7 +91,7 @@ def upload_pair(args, path: str, stem: str, steps: list[str],
             api.upload_text(sop_text(steps), s_name))
 
 
-def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
+def submit_all(args, rec: dict, sop_id: str | None, clips: list[str],
                steps: list[str]) -> None:
     """Submit every run before collecting any, then poll them in order.
 
@@ -113,113 +117,89 @@ def submit_all(args, bundle_id: str, sop_id: str | None, clips: list[str],
             continue
         video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id,
                                             suffix=args._suffix)
-        agent_id = api.run(bundle_id, video_id, clip_sop_id)
-        print(f"[{i}/{len(clips)}] submitted {stem:<32s} {agent_id}")
-        pending.append((stem, agent_id, out_path))
+        session_id = api.open_session(rec["batch"], video_id, clip_sop_id)["id"]
+        project.record_session(session_id, setting=rec["key"], kind="batch",
+                               clip=stem, out=out_path)
+        print(f"[{i}/{len(clips)}] submitted {stem:<32s} {session_id}")
+        pending.append((stem, session_id, out_path))
 
     print(f"\n{len(pending)} run(s) queued; the platform decides how many run at "
           f"once. Collecting in submission order.\n"
           f"Interrupting now leaves them running — cancel with:\n"
           f"  python3 sweep.py --cancel-all\n")
     log = []
-    for stem, agent_id, out_path in pending:
+    for stem, session_id, out_path in pending:
         t0 = time.time()
-        verdict = api.poll_logs(agent_id, quiet=True)
-        payload = api.fetch_results(agent_id, out_path)
+        verdict = api.poll_session(session_id, quiet=True)
+        payload = api.fetch_results(session_id, out_path)
         n = 0
         if payload:
             recs = [json.loads(l) for l in payload.decode(errors="replace").splitlines() if l.strip()]
             n = sum(len(r.get("results", [])) for r in recs)
         print(f"  {stem:<32s} {verdict} in {time.time() - t0:.0f}s — {n} step(s), "
               f"{len(payload or b'')} bytes")
-        log.append({"clip": stem, "agent_id": agent_id, "verdict": verdict,
+        log.append({"clip": stem, "session_id": session_id, "verdict": verdict,
                     "steps": n})
     with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as fh:
         json.dump(log, fh, indent=2)
     print(f"\nscore it:  python3 evaluate.py {args.out_dir}/tva-output-*.json")
 
 
-def collect(out_dir: str, bundle_id: str | None = None,
-            limit: int = 100) -> None:
-    """Download the output of every finished run, after the fact.
+def collect(out_dir: str, setting: str | None = None) -> None:
+    """Download the output of every finished session, after the fact.
 
     The recovery path, and the reason it exists: the runs live on the PLATFORM,
     not in the client. A client that dies — closed laptop, lost network, Ctrl-C,
     an exhausted retry budget — abandons results that are already computed and
-    that do not expire. This walks the org's instances and harvests whatever is
-    ready, so a sweep never has to be re-run because nobody was listening.
+    that do not expire. This walks the sessions recorded in state/lifecycle.json
+    (each is recorded the moment it exists) and harvests whatever is ready, so a
+    sweep never has to be re-run because nobody was listening.
 
-    Safe to run repeatedly: it skips clips already on disk and ignores runs that
-    are still going.
+    Safe to run repeatedly: it skips clips already on disk and ignores sessions
+    that are still going.
     """
-    instances = api.request("GET",
-                            f"{api.agents_base()}/instances?limit={limit}")
-    rows = [x for x in instances.get("data", [])
-            if x.get("blueprint") == "tva"
-            and (bundle_id is None or x.get("bundle_id") == bundle_id)]
+    rows = {sid: x for sid, x in project.sessions().items()
+            if x.get("kind") == "batch" and (setting is None or x.get("setting") == setting)}
     if not rows:
-        print("no tva runs found" + (f" for bundle {bundle_id}" if bundle_id else ""))
+        print("no recorded tva sessions" + (f" for {setting}" if setting else ""))
         return
 
     os.makedirs(out_dir, exist_ok=True)
     saved = skipped = pending = empty = dead = 0
-    for x in sorted(rows, key=lambda r: str(r.get("created_at"))):
-        aid, status = x["id"], x.get("status")
-        # Ask for results regardless of `status`, which is not a reliable
-        # terminality signal — a finished job has been seen still reading
-        # `running`. An unfinished run simply returns nothing.
-        res = api.request("GET", f"{api.agents_base()}/instances/{aid}/results")
-        items = res.get("data") or []
-        if not items:
-            # "No results" means two completely different things, and conflating
-            # them tells you to keep waiting for a run that is already over. A run
-            # that logged an ERROR, or reached a terminal event, will never produce
-            # output — one clip failed its S3 video download, logged an ERROR, and
-            # still reported job.completed.
-            rows = sorted(api.request(
-                "GET", f"{api.agents_base()}/instances/{aid}/logs?limit=500"
-            ).get("data", []), key=lambda r: str(r.get("created_at")))
-            errors = [r for r in rows if str(r.get("level")) == "ERROR"]
-            terminal = bool(rows) and str(rows[-1].get("event_type")) in api.TERMINAL_EVENTS
-            if errors:
-                dead += 1
-                msg = str(errors[0].get("message"))
-                # Lead with the CLIP, not the agent id: "which one failed?" is the
-                # first question, and the name is otherwise buried mid-message
-                # behind a long s3:// URI.
-                m = re.search(r'"([^"]+\.(?:mp4|mkv|webm|mov|m4v|avi))"', msg)
-                who = m.group(1) if m else "(clip not named in the error)"
-                print(f"  FAILED  {who}  ({aid})")
-                print(f"      it will not produce output. cause: {msg[:200]}")
-            elif terminal:
-                dead += 1
-                print(f"  {aid}  FINISHED   no results — terminal "
-                      f"({rows[-1].get('event_type')}) with nothing emitted")
-            else:
-                pending += 1
-                print(f"  {aid}  {status:9}  still in flight, no results yet")
-            continue
-        inner = items[0].get("data") or {}
-        # The output filename carries the clip: agt_<id>__output_<clip>.json
-        name = str(inner.get("filename") or "")
-        # The platform names outputs "<agent>__output_<clip>.json" — .json, not
-        # a different extension than you expect. Strip whatever extension is
-        # there rather than one specific suffix, or you get "<clip>.json.json".
-        stem = os.path.splitext(name.split("__output_", 1)[-1])[0] or aid
+    for sid, x in sorted(rows.items(), key=lambda r: str(r[1].get("created_at"))):
+        stem = x.get("clip") or sid
         out_path = os.path.join(out_dir, f"tva-output-{stem}.json")
         if os.path.exists(out_path):
             skipped += 1
             continue
-        payload = api.fetch_results(aid, out_path)
-        if payload is None:
+        code, ses = api.request("GET", api.sessions_url(sid), allow_status=True)
+        if code == 404:
+            continue                                 # deleted by cleanup.py
+        if code != 200:
+            sys.exit(f"GET {api.sessions_url(sid)} failed ({code}): {ses}")
+        status = ses.get("status")
+        if status not in api.TERMINAL:
             pending += 1
+            print(f"  {sid}  {status:9}  {stem:<32s} still in flight, no results yet")
+            continue
+        if status != "completed":
+            # "No results" means two different things, and conflating them tells
+            # you to keep waiting for a run that is already over. A failed or
+            # cancelled session will never produce output.
+            dead += 1
+            print(f"  FAILED  {stem}  ({sid}, {status})")
+            print(f"      it will not produce output. cause: {str(ses.get('error'))[:200]}")
+            continue
+        payload = api.fetch_results(sid, out_path)
+        if payload is None:
+            dead += 1
             continue
         recs = [json.loads(l) for l in payload.decode(errors="replace").splitlines()
                 if l.strip()]
         n = sum(len(r.get("results", [])) for r in recs)
         if n == 0:
             empty += 1
-        print(f"  {aid}  {status:9}  {stem:<32s} {n} verdict(s), "
+        print(f"  {sid}  {status:9}  {stem:<32s} {n} verdict(s), "
               f"{len(payload)} bytes -> {out_path}")
         saved += 1
 
@@ -231,16 +211,16 @@ def collect(out_dir: str, bundle_id: str | None = None,
 
 
 def cancel_all() -> None:
-    """Cancel every non-terminal run in the org. The escape hatch for --submit-all."""
-    instances = api.request("GET", f"{api.agents_base()}/instances?limit=100")
-    live = [x for x in instances.get("data", [])
-            if x.get("status") not in ("completed", "failed", "canceled")]
+    """Cancel every recorded session still going. The escape hatch for --submit-all."""
+    live = 0
+    for sid in project.sessions():
+        code, ses = api.request("GET", api.sessions_url(sid), allow_status=True)
+        if code == 200 and ses.get("status") not in api.TERMINAL:
+            api.cancel_session(sid)
+            live += 1
+            print(f"cancelled {sid} ({ses.get('status')})")
     if not live:
-        print("no non-terminal runs")
-        return
-    for x in live:
-        api.cancel(x["id"])
-        print(f"cancelled {x['id']} ({x.get('status')})")
+        print("no session still going")
 
 
 def main() -> None:
@@ -254,9 +234,8 @@ def main() -> None:
     ap.add_argument("--list", action="store_true",
                     help="list clips and their labels, then stop — no API calls")
     ap.add_argument("--blueprint", default=BLUEPRINT_DEFAULT,
-                    help=f"blueprint id or key (default: {BLUEPRINT_DEFAULT}). "
-                         f"The key 'tva' currently resolves to a blueprint whose "
-                         f"sink cannot be instantiated — see the README.")
+                    help=f"the blueprint to copy into the project, by id or key "
+                         f"(default: {BLUEPRINT_DEFAULT})")
     ap.add_argument("--max-frames", type=int, default=64)
     ap.add_argument("--size", type=int, default=224,
                     help="each frame is resized to size x size (blueprint default "
@@ -306,19 +285,21 @@ def main() -> None:
                          "Also removes the risk of concurrent runs clobbering a "
                          "shared SOP object.")
     ap.add_argument("--dry-run", action="store_true",
-                    help="print the plan — bundle values, clips, which are "
+                    help="print the plan — the setting, clips, which are "
                          "already done, estimated time — and stop. No API calls.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"SOP steps, one per line (default: {DEFAULT_SOP_PATH})")
     ap.add_argument("--collect", action="store_true",
-                    help="download the output of every finished tva run and stop. "
+                    help="download the output of every recorded session that "
+                         "has finished, and stop. "
                          "Use after a disconnect, a closed laptop or a Ctrl-C: the "
                          "runs continue on the platform and their results do not "
                          "expire, so nothing needs re-running. Safe to repeat.")
-    ap.add_argument("--bundle", metavar="ID",
-                    help="with --collect, restrict to one bundle's runs.")
+    ap.add_argument("--setting", metavar="KEY",
+                    help="with --collect, restrict to one setting's sessions "
+                         "(e.g. tva-f64-s224-t5760).")
     ap.add_argument("--cancel-all", action="store_true",
-                    help="cancel every non-terminal run in the org and stop. The "
+                    help="cancel every recorded session still going, and stop. The "
                          "escape hatch after --submit-all, since an abandoned run "
                          "blocks the shared GPU.")
     add_background_flag(ap, default_log="logs/sweep.log")
@@ -339,7 +320,7 @@ def main() -> None:
                  f"  use a new directory instead:  --out-dir eval_rerun")
 
     if args.collect:
-        collect(args.out_dir, args.bundle)
+        collect(args.out_dir, args.setting)
         return
 
     if args.cancel_all:
@@ -408,7 +389,8 @@ def main() -> None:
             out = os.path.join(args.out_dir, f"tva-output-{stem}.json")
             (todo if args.fresh or not os.path.exists(out)
              else done).append(stem)
-        print(f"blueprint  {args.blueprint}")
+        print(f"setting    {project.setting_key(values, args.blueprint)}  "
+              f"(a copy of {args.blueprint})")
         print(f"values     {json.dumps(values)}")
         # Show the ACTUAL ids for a representative clip, not a guess: the naming
         # differs per mode, and a --dry-run that prints the wrong name is worse than
@@ -434,7 +416,8 @@ def main() -> None:
                   f"REAL run will differ.\n"
                   f"           It keeps concurrent users from overwriting each "
                   f"other's inputs.")
-        print(f"bundle     ONE, reused for all runs")
+        print("agent      ONE copy, package and batch deployment for the setting, "
+              "reused; a session per clip")
         print(f"outputs    {args.out_dir}/tva-output-<clip>.json")
         if done:
             print(f"\nalready done, would be SKIPPED ({len(done)}):")
@@ -452,8 +435,8 @@ def main() -> None:
         return
 
     os.makedirs(args.out_dir, exist_ok=True)
-    # Every clip already done means nothing will run. Say so before creating a
-    # bundle: the likely cause is an out-dir holding results from another
+    # Every clip already done means nothing will run. Say so before building an
+    # agent: the likely cause is an out-dir holding results from another
     # environment or blueprint, which the skip check cannot tell apart.
     if not args.fresh and all(
             os.path.exists(os.path.join(
@@ -500,22 +483,20 @@ def main() -> None:
               f"{os.path.splitext(os.path.basename(args.sop))[0]}.{{mp4,txt}} "
               "— stems match and record the SOP")
 
-    # ONE bundle for the whole sweep, reused by every run.
+    # ONE agent for the whole sweep — the setting's copy, package and batch
+    # deployment — and a session per clip.
     #
-    # A bundle carries only `values`, and they are identical for every clip here.
     # The two things that vary per run — the video and the SOP — are both source
-    # connector inputs, supplied at run time. So there is nothing a per-clip
-    # bundle could hold that differs, and creating twelve identical bundles just
-    # to launch twelve runs is noise in the console and twelve extra API calls.
-    #
-    # This is the same property the README's Stage 2 describes from the other
-    # direction: because the SOP travels with the run rather than the bundle, one
-    # bundle serves every SOP — and a fortiori every clip under one SOP.
-    bundle = api.create_bundle(args.blueprint, f"TVA sweep ({len(clips)} clips)",
-                               values)
-    print(f"bundle {bundle['id']} (reused for all {len(clips)} runs)\n")
+    # connector inputs, supplied per session. So there is nothing a per-clip copy
+    # or deployment could hold that differs. This is the same property the
+    # README's Stage 2 describes from the other direction: because the SOP travels
+    # with the session rather than the blueprint, one agent serves every SOP — and
+    # a fortiori every clip under one SOP.
+    rec = project.agent(values, "batch", source=args.blueprint)
+    print(f"agent {rec['key']}: copy {rec['blueprint']}, package {rec['package']}, "
+          f"deployment {rec['batch']} (reused for all {len(clips)} runs)\n")
     if args.submit_all:
-        submit_all(args, bundle["id"], sop_id, clips, steps)
+        submit_all(args, rec, sop_id, clips, steps)
         return
 
     log = []
@@ -528,14 +509,16 @@ def main() -> None:
             continue
         print(f"[{i}/{len(clips)}] {stem}  ({label_str(stem)})")
         t0 = time.time()
-        agent_id = None
+        session_id = None
         try:
             video_id, clip_sop_id = upload_pair(args, path, stem, steps, sop_id,
                                                 suffix=args._suffix)
-            agent_id = api.run(bundle["id"], video_id, clip_sop_id)
-            print(f"  agent_id={agent_id}")
-            verdict = api.poll_logs(agent_id, quiet=True)
-            payload = api.fetch_results(agent_id, out_path)
+            session_id = api.open_session(rec["batch"], video_id, clip_sop_id)["id"]
+            project.record_session(session_id, setting=rec["key"], kind="batch",
+                                   clip=stem, out=out_path)
+            print(f"  session_id={session_id}")
+            verdict = api.poll_session(session_id, quiet=True)
+            payload = api.fetch_results(session_id, out_path)
             n = 0
             if payload:
                 recs = [json.loads(l) for l in payload.decode(errors="replace").splitlines() if l.strip()]
@@ -543,18 +526,18 @@ def main() -> None:
             print(f"  {verdict} in {time.time() - t0:.0f}s — {n} step(s), "
                   f"{len(payload or b'')} bytes, "
                   f"md5 {hashlib.md5(payload or b'').hexdigest()[:8]}")
-            log.append({"clip": stem, "agent_id": agent_id, "verdict": verdict,
+            log.append({"clip": stem, "session_id": session_id, "verdict": verdict,
                         "steps": n, "seconds": round(time.time() - t0)})
         except KeyboardInterrupt:
             # Never leave a run on the GPU. Dev has one, and an abandoned run
             # blocks everyone until it times out.
-            if agent_id:
-                print(f"\n  interrupted — cancelling {agent_id}")
-                api.cancel(agent_id)
+            if session_id:
+                print(f"\n  interrupted — cancelling {session_id}")
+                api.cancel_session(session_id)
             sys.exit(130)
         except SystemExit as e:
             print(f"  FAILED: {e}")
-            log.append({"clip": stem, "agent_id": agent_id, "verdict": "error",
+            log.append({"clip": stem, "session_id": session_id, "verdict": "error",
                         "error": str(e)})
 
     with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as fh:

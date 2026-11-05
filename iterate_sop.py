@@ -41,6 +41,7 @@ import os
 import sys
 
 import tva_api as api
+import tva_project as project
 from background import add_background_flag, maybe_detach
 from run_tva_example import (CLIP_DIR, BLUEPRINT_DEFAULT, load_sop, resolve_clip,
                              sop_text, parse_ground_truth, STATUSES)
@@ -232,28 +233,32 @@ def main() -> None:
     sop_id = api.upload_text(sop_text(steps), f"{stem}.txt")
     print(f"  video file_id={video_id}\n  sop   file_id={sop_id}")
 
-    bundle = api.create_bundle(args.blueprint, f"tva-{stem}"[:60], values)
-    print(f"bundle {bundle['id']} status={bundle.get('status')}")
-    agent_id = api.run(bundle["id"], video_id, sop_id)
-    print(f"run {agent_id}\n  watching /logs (~7 min of model loading first) ...")
+    # Every variant at one setting shares the setting's copy, package and batch
+    # deployment: the SOP is a session input, not part of the agent.
+    rec = project.agent(values, "batch", source=args.blueprint)
+    print(f"agent {rec['key']}: deployment {rec['batch']}")
+    session_id = api.open_session(rec["batch"], video_id, sop_id)["id"]
+    project.record_session(session_id, setting=rec["key"], kind="batch", clip=stem,
+                           out=out_path)
+    print(f"session {session_id}\n  watching it (~7 min of model loading first) ...")
 
     # Never leave a run on the GPU. Dev has ONE, and an abandoned run blocks
     # everyone until it times out. Without this, Ctrl-C killed the client with a
     # traceback and left the job running with nothing watching it — the result was
-    # still on the platform, but only recoverable by hand from the agent id.
+    # still on the platform, but only recoverable by hand from its id.
     try:
-        verdict = api.poll_logs(agent_id)
+        verdict = api.poll_session(session_id)
     except KeyboardInterrupt:
         print(f"\ninterrupted. The run is STILL ON THE GPU — pick one:\n"
               f"  cancel : python3 -c \"import tva_api as api; "
-              f"api.cancel('{agent_id}')\"\n"
+              f"api.cancel_session('{session_id}')\"\n"
               f"  collect: python3 -c \"import tva_api as api; "
-              f"api.fetch_results('{agent_id}', '{out_path}')\"")
+              f"api.fetch_results('{session_id}', '{out_path}')\"")
         sys.exit(130)
-    print(f"\nrun {verdict}")
-    payload = api.fetch_results(agent_id, out_path)
+    print(f"\nsession {verdict}")
+    payload = api.fetch_results(session_id, out_path)
     if payload is None:
-        sys.exit(f"no results — full log: {api.agents_base()}/instances/{agent_id}/logs")
+        sys.exit(f"no results — {api.sessions_url(session_id)}/events")
     print(f"  saved {out_path} ({len(payload)} bytes, "
           f"md5 {hashlib.md5(payload).hexdigest()})")
     if args.step_map:

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Minimal stdlib-only client for the Archetype AI Agent API, for TVA.
 
-Shared by run_tva_example.py, sweep.py and inspect_bundle.py. Auth and endpoint
-come from the environment, with a local .env loaded if present:
+Shared by run_tva_example.py, sweep.py, sweep_serve.py, iterate_sop.py and
+cleanup.py. Auth and endpoint come from the environment, with a local .env
+loaded if present:
 
     ATAI_API_KEY=<API key>
     ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
@@ -18,6 +19,12 @@ of one thing: **TVA takes a reference procedure at runtime and MGA does not.**
     MultiModalSource routes by the `format` field, not by position.
   * There is no fitted-artifact path, same as MGA: TVA V1 is zero-shot, and the
     blueprint pins newton-fusion:1.0 and whisper:large-v3 itself.
+
+The Agent Lifecycle 2.0: a copy of `tva` in a project, with this run's values
+set on it, is packaged (its models resolved once), the package is deployed as
+`batch` or `serving`, and work runs in sessions on the deployment. A batch
+session is one run over one video and its SOP; a serving session answers
+`/query` until it is cancelled. tva_project.py keeps the ids.
 """
 from __future__ import annotations
 
@@ -31,9 +38,8 @@ import urllib.error
 import urllib.request
 import uuid
 
-# The log event types that end a run. The instance `status` field is not usable
-# for this — see poll_logs().
-TERMINAL_EVENTS = ("pod.terminated", "job.completed", "job.failed", "job.canceled")
+# A session's terminal statuses.
+TERMINAL = {"completed", "failed", "cancelled"}
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -306,9 +312,8 @@ def get_blueprint(key: str) -> dict:
     status, payload = request("GET", f"{agents_base()}/blueprints/{key}",
                               allow_status=True)
     if status == 404:
-        sys.exit(f"blueprint '{key}' is not registered in your org — ask an org "
-                 f"admin to register it, or list what is with:\n"
-                 f"  python3 inspect_bundle.py --blueprints")
+        sys.exit(f"blueprint '{key}' is not visible to this API key — list what "
+                 f"is with GET {agents_base()}/blueprints")
     if status != 200:
         sys.exit(f"GET blueprints/{key} failed ({status}): {payload}")
     return payload
@@ -318,9 +323,10 @@ def inert_values(doc: dict, values: dict) -> list[str]:
     """Which of `values` the blueprint will silently ignore.
 
     A value is honoured only if it is declared in the blueprint's `values` AND
-    referenced as ${values.<key>} by some node or connector. The API accepts
-    anything else, stores it on the bundle, and drops it — so this is the check
-    worth running BEFORE spending 15 minutes of GPU.
+    referenced as ${values.<key>} by some node or connector. A copy refuses an
+    undeclared key with a 400, but a declared value that nothing references is
+    accepted and has no effect — so this is the check worth running BEFORE
+    spending 15 minutes of GPU.
 
     It reads the blueprint document rather than hardcoding key names, so it
     keeps working after an upstream fix: a value that starts being wired flips
@@ -345,7 +351,7 @@ def inert_values(doc: dict, values: dict) -> list[str]:
 #
 # The platform validates the graph AFTER downloading and loading both models, so
 # the failure costs the full cold start — 996 s observed — and leaves no results.
-# Nothing in the bundle response hints at it: the bundle is `status: ready`.
+# Nothing in the bundle response hinted at it: the bundle was `status: ready`.
 #
 # There is no endpoint that lists registered connectors, so this is an allowlist
 # of what has run plus the one value observed to be broken. It reads the blueprint
@@ -378,7 +384,7 @@ def check_sink(doc: dict) -> str | None:
     return None
 
 
-# The model's total context in this deployment. NOT exposed as a bundle value, and
+# The model's total context in this deployment. NOT exposed as a blueprint value, and
 # the prompt and the generation budget must both fit inside it:
 #
 #   estimated prompt 2368 tokens + 8191 reserved for generation exceeds
@@ -395,7 +401,7 @@ def check_sink(doc: dict) -> str | None:
 #
 # The node schema's own ceiling is 262144 (256K), which matches the context the
 # design doc advertises, so the served window may now be anywhere in (9304, 262144].
-# It is NOT exposed as a bundle value, so it cannot be read — only bracketed by
+# It is NOT exposed as a blueprint value, so it cannot be read — only bracketed by
 # runs. Treated as a floor rather than a limit: the preflight now warns instead of
 # refusing, because a stale constant that blocks good work is worse than one that
 # lets a bad run through.
@@ -532,110 +538,198 @@ def check_token_budget(max_frames: int, max_new_tokens: int,
             f"'exceeds max_seq_len=<N>' — and <N> is worth reporting.")
 
 
-def create_bundle(blueprint: str, name: str, values: dict) -> dict:
-    """POST /agents/bundles — note the PLURAL. The singular form 404s."""
-    return request("POST", f"{agents_base()}/bundles",
-                   body={"blueprint": blueprint, "name": name, "values": values})
+def packages_url(package_id: str = "") -> str:
+    """A package pins one blueprint and the models it resolves to. It carries no
+    values: it runs its blueprint exactly as stored, so max_frames, size and
+    max_new_tokens are set on the blueprint copy it is built from."""
+    base = f"{agents_base()}/packages"
+    return f"{base}/{package_id}" if package_id else base
 
 
-def run(bundle_id: str, video_file_id: str, sop_file_id: str) -> str:
-    """Start a run with a video AND an SOP text input. Returns the agent id.
+def deployments_url(deployment_id: str = "") -> str:
+    base = f"{agents_base()}/deployments"
+    return f"{base}/{deployment_id}" if deployment_id else base
 
-    Both inputs go in the same `connectors.source` list and MultiModalSource
-    routes them by `format`: `mp4` reaches `source.video`, `txt` reaches
-    `source.text`. Omit the text input and the run still starts, then the
-    prompt generator waits on an instruction that never arrives.
+
+def sessions_url(session_id: str = "") -> str:
+    base = f"{agents_base()}/sessions"
+    return f"{base}/{session_id}" if session_id else base
+
+
+def _wait_for(url: str, status: str, waiting: str, timeout_s: int, every_s: int = 5) -> dict:
+    obj = request("GET", url)
+    t0 = time.time()
+    while obj["status"] == waiting:
+        if time.time() - t0 > timeout_s:
+            sys.exit(f"{obj['id']} still {waiting} after {timeout_s} s")
+        time.sleep(every_s)
+        obj = request("GET", url)
+    if obj["status"] != status:
+        sys.exit(f"{obj['id']} is {obj['status']}, not {status}: {obj.get('error')}")
+    return obj
+
+
+def copy_blueprint(source: str, project_id: str, key: str, values: dict,
+                   name: str | None = None) -> dict:
+    """POST /agents/blueprints/{source}/copy with `values` set in the copy.
+
+    This is where a bundle's `values` went. A copy takes `overrides.values`, each
+    of which must be one the blueprint declares (an undeclared key is a 400, unlike
+    a bundle, which stored it and ignored it). `tva` fits nothing, so any of its
+    values may be overridden. The copy lands in `project_id` under `key`; a key
+    already in use there is a 409.
     """
-    agent = request("POST", f"{agents_base()}/bundles/{bundle_id}/run",
-                    body={"connectors": {"source": [
-                        {"type": "file", "id": video_file_id, "format": "mp4"},
-                        {"type": "file", "id": sop_file_id, "format": "txt"},
-                    ]}})
-    return agent["id"]
+    body = {"project_id": project_id, "blueprint_key": key,
+            "overrides": {"values": values}}
+    if name:
+        body["name"] = name
+    return request("POST", f"{agents_base()}/blueprints/{source}/copy", body=body)
 
 
-def poll_logs(agent_id: str, timeout_s: int = 3600, interval_s: int = 20,
-              quiet: bool = False) -> str:
-    """Stream /logs until a terminal event. Returns 'completed'/'failed'/'timeout'.
+def create_package(blueprint_id: str, name: str) -> dict:
+    """Package one blueprint for the platform; it starts `building`.
 
-    Two things this deliberately does NOT do:
+    Record its id before package_ready(), so a build that fails or is
+    interrupted can still be deleted."""
+    return request("POST", packages_url(), body={
+        "blueprint_ids": [blueprint_id], "target": {"kind": "platform"}, "name": name[:128]})
 
-      * It does not read the instance `status` field, which lies in both
-        directions — `running` has persisted 20+ minutes after a pod terminated
-        with exit=1, and `running` after a job completed.
-      * It does not poll /events, which carries only "run started" and
-        "dispatched to JOS". /logs is the stream the console shows: model load
-        timings, per-input progress and the real error.
+
+def package_ready(package_id: str, timeout_s: int = 900) -> dict:
+    return _wait_for(packages_url(package_id), "ready", "building", timeout_s)
+
+
+def deploy(package_id: str, kind: str) -> dict:
+    """Deploy a ready package as `batch` or `serving`; it starts `deploying`.
+
+    A batch deployment is ready at once; a serving one is placed on a GPU worker
+    first. Record its id before deployment_ready()."""
+    return request("POST", deployments_url(), body={"package_id": package_id, "kind": kind})
+
+
+def deployment_ready(deployment_id: str, timeout_s: int = 900) -> dict:
+    return _wait_for(deployments_url(deployment_id), "ready", "deploying", timeout_s)
+
+
+def open_session(deployment_id: str, video_file_id: str | None = None,
+                 sop_file_id: str | None = None) -> dict:
+    """A batch session over one video AND its SOP, or a serving session with neither.
+
+    Both inputs go in the same `connectors.source` list, exactly as a bundle run
+    took them, and MultiModalSource routes them by `format`: `mp4` reaches
+    `source.video`, `txt` reaches `source.text`. The order does not matter. Omit
+    the text input and the session still starts, then the prompt generator waits
+    on an instruction that never arrives.
+    """
+    body = {"deployment_id": deployment_id}
+    if video_file_id:
+        body["connectors"] = {"source": [
+            {"type": "file", "id": video_file_id, "format": "mp4"},
+            {"type": "file", "id": sop_file_id, "format": "txt"},
+        ]}
+    return request("POST", sessions_url(), body=body)
+
+
+def wait_running(session_id: str, timeout_s: int = 1800) -> dict:
+    """A serving session takes queries once it is `running`."""
+    return _wait_for(sessions_url(session_id), "running", "pending", timeout_s, every_s=10)
+
+
+def poll_session(session_id: str, timeout_s: int = 3600, interval_s: int = 20,
+                 quiet: bool = False) -> str:
+    """Poll a batch session until it ends, printing its events as they appear.
+
+    Returns the final status (`completed`, `failed`, `cancelled`), or `timeout`.
+
+    A session has no /logs, only /events: what the platform records about the
+    session (opened, dispatched, failed with a reason), not the model-load timings
+    and parser messages a bundle run's /logs carried. So the parser's warning that
+    generation ended inside the reasoning block is no longer visible here. A run
+    that hit it still ends `completed`, with `results: []` in its output: count
+    the verdicts (see empty_output()).
     """
     seen: set[str] = set()
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        rows = sorted(
-            request("GET", f"{agents_base()}/instances/{agent_id}/logs?limit=500")
-            .get("data", []),
-            key=lambda r: str(r.get("created_at")))
-        for r in rows:
-            marker = f"{r.get('created_at')}|{r.get('event_type')}|{r.get('message')}"
+        ses = request("GET", sessions_url(session_id))
+        events = request("GET", f"{sessions_url(session_id)}/events?limit=100").get("data", [])
+        for ev in reversed(events):                    # newest first
+            marker = f"{ev.get('created_at')}|{ev.get('message')}"
             if marker in seen:
                 continue
             seen.add(marker)
             if not quiet:
-                print(f"  {str(r.get('created_at'))[11:19]} "
-                      f"{str(r.get('level')):7} {str(r.get('event_type')):28} "
-                      f"{r.get('message')}")
-        if rows and str(rows[-1].get("event_type")) in TERMINAL_EVENTS:
-            if any(str(r.get("level")) == "ERROR" for r in rows):
-                return "failed"
-            # A WARN from the parser is not cosmetic: "generation ended inside the
-            # model's reasoning block (no </think>)" means the whole token budget
-            # went on reasoning and NO verdicts were emitted. The job still
-            # reports completed and /results still returns a record — with an
-            # empty results list. Report it as its own outcome so a caller cannot
-            # mistake it for a successful run.
-            for r in rows:
-                msg = str(r.get("message", ""))
-                if str(r.get("level")) == "WARN" and "reasoning block" in msg:
-                    if not quiet:
-                        print(f"  PARSER WARNING: {msg}")
-                    return "empty-reasoning-overflow"
-            return "completed"
+                print(f"  {str(ev.get('created_at'))[11:19]} "
+                      f"{str(ev.get('level', 'info')):7} {ev.get('message')}")
+        if ses["status"] in TERMINAL:
+            if ses.get("error") and not quiet:
+                print(f"  {session_id}: {ses['error']}")
+            return ses["status"]
         time.sleep(interval_s)
     return "timeout"
 
 
-def fetch_results(agent_id: str, out_path: str) -> bytes | None:
-    """Fetch /results and save the first output. Returns the bytes."""
-    results = request("GET", f"{agents_base()}/instances/{agent_id}/results")
+def empty_output(payload: bytes | None) -> bool:
+    """True when an output holds a record but no verdicts: `results: []`.
+
+    What a run looks like when the whole token budget went on reasoning. The
+    session still ends `completed`, so this is the only place it shows."""
+    if not payload:
+        return False
+    recs = [json.loads(l) for l in payload.decode(errors="replace").splitlines() if l.strip()]
+    return bool(recs) and not any(r.get("results") for r in recs)
+
+
+def fetch_results(session_id: str, out_path: str) -> bytes | None:
+    """Fetch the session's /results and save the first output. Returns the bytes."""
+    results = request("GET", f"{sessions_url(session_id)}/results")
     items = results.get("data") or []
     if not items:
-        print("  no results (a failed run leaves none)")
+        print("  no results (a failed session leaves none)")
         return None
     if len(items) > 1:
-        # `json/per-request` writes one numbered file PER REQUEST, so a run with
-        # several inputs returns several entries. Reading only the first would
+        # `json/per-request` writes one numbered file PER REQUEST, so a session with
+        # several requests returns several entries. Reading only the first would
         # silently drop the rest.
         print(f"  WARNING: {len(items)} result files returned; this saves only the "
-              f"first. With json/per-request each input gets its own numbered "
-              f"file — fetch the rest by ref if you sent multiple inputs.")
-    inner = items[0].get("data") or {}
-    ref = inner.get("ref") or items[0].get("ref")
+              f"first. With json/per-request each request gets its own numbered "
+              f"file.")
+    inner = items[-1].get("data") or {}           # newest first: the last is the first written
+    ref = inner.get("ref")
     if not ref:
         print("  results carried no download ref")
         return None
-    # A run output's ref is a RELATIVE platform path that resolves under files_root()
-    # and needs the bearer token; an absolute ref is presigned S3 and must NOT
-    # get the header. Run outputs do not expire, so this is re-fetchable later.
+    # An absolute ref is presigned and must NOT get the bearer header. A session's
+    # relative ref is a root path, `/api/files/<id>/content`, not one under the
+    # endpoint, and needs the token.
     if ref.startswith("http"):
         with urllib.request.urlopen(ref, timeout=300) as resp:
             payload = resp.read()
     else:
-        payload = request("GET", f"{files_root()}{ref}", raw=True)
+        endpoint = api_base()
+        root = endpoint.removesuffix("/api") if ref.startswith("/api/") else files_root()
+        payload = request("GET", f"{root}{ref}", raw=True)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     open(out_path, "wb").write(payload)
     return payload
 
 
-def cancel(agent_id: str) -> None:
-    """POST /cancel. Do NOT send DELETE expecting a no-op — it removes the run."""
-    request("POST", f"{agents_base()}/instances/{agent_id}/cancel",
-            allow_status=True)
+def cancel_session(session_id: str) -> None:
+    """POST /cancel. Do NOT send DELETE expecting a no-op — it removes the session."""
+    request("POST", f"{sessions_url(session_id)}/cancel", body={}, allow_status=True)
+
+
+def end_session(session_id: str) -> None:
+    """Cancel a session that is still going, then delete it."""
+    status, ses = request("GET", sessions_url(session_id), allow_status=True)
+    if status == 200 and ses.get("status") not in TERMINAL:
+        cancel_session(session_id)
+    request("DELETE", sessions_url(session_id), raw=True, allow_status=True)
+
+
+def end_deployment(deployment_id: str) -> None:
+    """Stop a deployment that is still up, then delete it."""
+    status, dpl = request("GET", deployments_url(deployment_id), allow_status=True)
+    if status == 200 and dpl.get("status") not in ("stopped", "failed"):
+        request("POST", f"{deployments_url(deployment_id)}/stop", body={}, allow_status=True)
+    request("DELETE", deployments_url(deployment_id), raw=True, allow_status=True)

@@ -40,3 +40,6 @@ data/clips-serving/
 
 # --background logs — one per script, appended per run.
 logs/
+
+# The project's ids on one deployment of the platform (tva_project.py) — per account.
+state/

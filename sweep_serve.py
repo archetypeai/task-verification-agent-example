@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """sweep.py over agent serving: load TVA once, then one /query per clip.
 
-    python3 sweep_serve.py --all                       # every clip, one agent
+    python3 sweep_serve.py --all                       # every clip, one session
     python3 sweep_serve.py --clips 1_pass_2_pass_3_pass_A --repeat 3
-    python3 sweep_serve.py --all --keep                # leave the agent loaded
-    python3 sweep_serve.py --all --agent agt_…         # reuse it: no model load
+    python3 sweep_serve.py --all --keep                # leave the session loaded
+    python3 sweep_serve.py --all --session ses_…       # reuse it: no model load
     python3 evaluate.py eval_serving/tva-output-*.json
 
     python3 sweep_serve.py --all --chunk 4 --dry-run   # cut, print the plan, call nothing
@@ -18,21 +18,23 @@ the cap as the clip's own bytes; longer ones are re-encoded, more lightly than
 a whole clip.
 
 Batch (sweep.py) pays ~7-12 min of model download and load on EVERY clip.
-Serving runs the same `tva` bundle with {"mode": "serving"}: the agent loads
-once and answers POST /agents/instances/{id}/query for each clip, so twelve
-clips cost one load plus twelve answers instead of twelve loads.
+Serving deploys the setting's package (the same copy of `tva` sweep.py uses, see
+tva_project.py) as `serving` and opens one session on it: the model loads once
+and the session answers POST /agents/sessions/{id}/query for each clip, so
+twelve clips cost one load plus twelve answers instead of twelve loads.
 
-Limits today (agent serving is on dev only, as of 2026-10-28):
-  - one GPU agent at a time on dev; another is refused while it's busy
+Limits, as measured with bundles on dev (2026-10-28):
+  - one GPU worker at a time on dev; another is refused while it's busy
   - the video goes inline (`"file_ids": ["base64:<mp4>"]`) and the whole body is
     capped at 2 MiB, so every clip is re-encoded to fit, into data/clips-serving/.
     TVA samples 64 frames at 224 px, so 640x480 at CRF 28 loses little, but the
     bytes differ from batch's and verdicts can too
   - each query has a 58 s budget; a 504 is retried
-  - an agent with no query for 20 minutes is released
+  - a serving session with no query for 30 minutes is closed (the deployment's
+    default idle timeout)
 
-The agent is cancelled at the end, Ctrl-C included, unless --keep: it holds
-dev's only GPU worker.
+The session is cancelled and the serving deployment stopped and deleted at the
+end, Ctrl-C included, unless --keep: it holds a GPU worker.
 """
 from __future__ import annotations
 
@@ -46,6 +48,7 @@ import sys
 import time
 
 import tva_api as api
+import tva_project as project
 from background import add_background_flag, maybe_detach
 from run_tva_example import DEFAULT_SOP_PATH, load_sop, resolve_clip, sop_text
 from sweep import label_str
@@ -54,8 +57,8 @@ OUT_DIR = "eval_serving"
 CLIP_CACHE = "data/clips-serving"
 BODY_CAP = 2 * 1024 * 1024
 # A chunk with fewer frames than the blueprint's max_frames ceiling (64): on dev
-# (2026-10-26) a 35-frame tail chunk ended the served agent (fixed by PLDEV-2480), and
-# a 40-frame one took 10x longer to answer.
+# (2026-10-26) a 35-frame tail chunk ended the served agent (since fixed), and a
+# 40-frame one took 10x longer to answer.
 MIN_CHUNK_FRAMES = 64
 # Tried in order until the request fits: full resolution first, since frames are
 # what the model sees.
@@ -178,73 +181,59 @@ def verdict_doc(answer: dict, stem: str) -> dict | None:
     return {"id": stem, "results": rows} if isinstance(rows, list) else None
 
 
-def new_logs(agent_id: str, seen: set) -> None:
-    status, body = api.request("GET", f"{api.agents_base()}/instances/{agent_id}/logs?limit=500",
+def new_events(session_id: str, seen: set) -> None:
+    """Print the session's events not seen yet. A session has no /logs."""
+    status, body = api.request("GET", f"{api.sessions_url(session_id)}/events?limit=100",
                                allow_status=True)
     if status != 200 or not isinstance(body, dict):
         return
-    for row in sorted(body.get("data") or [], key=lambda r: str(r.get("created_at"))):
-        key = (row.get("created_at"), row.get("event_type"), row.get("message"))
+    for row in reversed(body.get("data") or []):          # newest first
+        key = (row.get("created_at"), row.get("message"))
         if key not in seen:
             seen.add(key)
-            log(f"  {str(row.get('level')):7} {str(row.get('event_type')):28} {row.get('message')}")
+            log(f"  {str(row.get('level', 'info')):7} {row.get('message')}")
 
 
-def wait_running(agent: str, seen: set, timeout_s: int) -> None:
-    t0 = time.time()
-    while (status := api.request("GET", f"{api.agents_base()}/instances/{agent}").get("status")) != "running":
-        new_logs(agent, seen)
-        if status in ("failed", "completed", "cancelled", "canceled") or time.time() - t0 > timeout_s:
-            sys.exit(f"agent {agent} is {status}, not running")
-        time.sleep(10)
+def release(session_id: str, deployment_id: str | None, setting: str | None) -> str:
+    """Cancel and delete the session, then stop and delete its serving deployment.
 
-
-def release(agent: str, bundle: str | None) -> str:
-    """Cancel the agent and, when this run made the bundle, delete both.
-
-    A bundle still referenced by a run cannot be deleted (409), so the agent goes
-    first, retried while its cancel lands.
-    """
-    base = api.agents_base()
-    api.cancel(agent)
-    if not bundle:
-        return f"cancelled {agent}"
-    for _ in range(12):
-        code, _ = api.request("DELETE", f"{base}/instances/{agent}", raw=True, allow_status=True)
-        if 200 <= code < 300 or code == 404:
-            break
-        time.sleep(5)
-    code, body = api.request("DELETE", f"{base}/bundles/{bundle}", raw=True, allow_status=True)
-    if 200 <= code < 300:
-        return f"cancelled and deleted {agent}, deleted {bundle}"
-    return f"cancelled {agent}; {bundle} NOT deleted ({code}): {str(body)[:200]}"
+    The deployment is what holds the GPU worker; a session alone does not. The
+    package and the copy stay: sweep.py's batch deployment uses them too, and
+    cleanup.py deletes the package."""
+    api.end_session(session_id)
+    if not deployment_id:
+        return f"cancelled and deleted {session_id}"
+    api.end_deployment(deployment_id)
+    if setting:
+        project.forget(setting, "serving")
+    return f"cancelled and deleted {session_id}, stopped and deleted {deployment_id}"
 
 
 class AgentGone(Exception):
-    """The agent no longer answers: cancelled, or released after 20 idle minutes."""
+    """The session no longer answers: cancelled, or closed after 30 idle minutes."""
 
 
 QUERY_TIMEOUT = 90      # the platform's budget is 58 s; past this the request is lost
 QUERY_RETRIES = 3
 
 
-def ask(agent: str, body: dict, deadline: float, seen: set) -> tuple[dict, float, int]:
+def ask(session: str, body: dict, deadline: float, seen: set) -> tuple[dict, float, int]:
     """POST /query, retrying 5xx and timeouts (the cold-agent 504).
 
     Until `deadline` (the model load) it retries without limit; after that, a few
-    times. A query that hangs never reaches the agent, and an agent without a
-    query for 20 minutes is released, so a stuck request must not be waited out.
+    times. A query that hangs never reaches the agent, and a session without a
+    query for 30 minutes is closed, so a stuck request must not be waited out.
     """
     tries = 0
     while True:
         tries += 1
         t = time.time()
-        code, answer = api.request("POST", f"{api.agents_base()}/instances/{agent}/query",
+        code, answer = api.request("POST", f"{api.sessions_url(session)}/query",
                                    body=body, allow_status=True, retries=0, timeout=QUERY_TIMEOUT)
         took = time.time() - t
         if code == 200:
             return answer, took, tries
-        new_logs(agent, seen)
+        new_events(session, seen)
         log(f"    {code or 'no answer'} after {took:.0f} s: {str(answer)[:160]}")
         if code == 409:
             raise AgentGone(str(answer))
@@ -270,7 +259,7 @@ def output_path(args, stem: str) -> str:
     return os.path.join(args.out_dir, f"tva-output-{stem}.json")
 
 
-def query_video(agent: str, video_path: str, sop: str, stem: str, repeat: int,
+def query_video(session: str, video_path: str, sop: str, stem: str, repeat: int,
                 deadline: float, seen: set, entry: dict) -> dict | None:
     """Ask `repeat` times about one video; the first answer, as {"id", "results"}."""
     with open(video_path, "rb") as f:
@@ -279,7 +268,7 @@ def query_video(agent: str, video_path: str, sop: str, stem: str, repeat: int,
     docs = []
     for r in range(repeat):
         try:
-            answer, took, tries = ask(agent, body, max(deadline, time.time() + 120), seen)
+            answer, took, tries = ask(session, body, max(deadline, time.time() + 120), seen)
         except RuntimeError as e:
             entry["queries"].append({"error": str(e)})
             log(f"    FAILED: {e}")
@@ -319,8 +308,11 @@ def main() -> None:
     ap.add_argument("--repeat", type=int, default=1, help="queries per clip, to check determinism")
     ap.add_argument("--max-frames", type=int, default=64)
     ap.add_argument("--max-new-tokens", type=int, default=api.DEFAULT_MAX_NEW_TOKENS)
-    ap.add_argument("--agent", metavar="ID", help="query this running serving agent; no new load")
-    ap.add_argument("--keep", action="store_true", help="leave the agent running for --agent")
+    ap.add_argument("--size", type=int, default=224)
+    ap.add_argument("--blueprint", default="tva", help="the blueprint to copy (default: tva)")
+    ap.add_argument("--session", metavar="ID", help="query this running serving session; no new load")
+    ap.add_argument("--keep", action="store_true",
+                    help="leave the session and its deployment running, for --session")
     ap.add_argument("--ready-timeout", type=int, default=1800,
                     help="seconds to wait for the first answer (model load is ~7-12 min)")
     add_background_flag(ap, default_log="logs/sweep_serve.log")
@@ -381,26 +373,28 @@ def main() -> None:
         return
 
     api.load_dotenv()
-    if ".dev." not in api.api_base():
-        sys.exit(f"agent serving is on dev only (2026-10-28); ATAI_API_ENDPOINT is {api.api_base()}")
     log(f"{len(todo)} clip(s), {n_queries * args.repeat} queries, SOP {args.sop}")
     os.makedirs(os.path.dirname(output_path(args, "x")), exist_ok=True)
 
     seen: set = set()
-    bundle = None
+    setting = None
     t0 = time.time()
-    if args.agent:
-        agent = args.agent
+    if args.session:
+        session = args.session
+        deployment = api.request("GET", api.sessions_url(session)).get("deployment_id")
     else:
-        values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens}
-        bundle = api.create_bundle("tva", f"tva serving sweep {api.run_suffix()}", values)["id"]
-        agent = api.request("POST", f"{api.agents_base()}/bundles/{bundle}/run",
-                            body={"mode": "serving"})["id"]
-        log(f"bundle {bundle} · agent {agent} (serving) · {values}")
-    sweep_log = {"agent": agent, "bundle": bundle, "sop": args.sop, "clips": []}
+        values = {"max_frames": args.max_frames, "max_new_tokens": args.max_new_tokens,
+                  "size": args.size}
+        rec = project.agent(values, "serving", source=args.blueprint)
+        setting, deployment = rec["key"], rec["serving"]
+        session = api.open_session(deployment)["id"]
+        project.record_session(session, setting=setting, kind="serving")
+        log(f"{setting} · serving deployment {deployment} · session {session}")
+    sweep_log = {"session": session, "deployment": deployment, "setting": setting,
+                 "sop": args.sop, "clips": []}
     try:
-        wait_running(agent, seen, args.ready_timeout)
-        log(f"agent running after {time.time() - t0:.0f} s")
+        api.wait_running(session, timeout_s=args.ready_timeout)
+        log(f"session running after {time.time() - t0:.0f} s")
         deadline = t0 + args.ready_timeout     # only the first answer may wait on the load
         for i, path in enumerate(todo, 1):
             stem = stems[path]
@@ -408,7 +402,7 @@ def main() -> None:
             if not args.chunk:
                 entry = {"clip": stem, "sent": shrunk[path]}
                 sweep_log["clips"].append(entry)
-                doc = query_video(agent, shrunk[path], sop, stem, args.repeat, deadline, seen, entry)
+                doc = query_video(session, shrunk[path], sop, stem, args.repeat, deadline, seen, entry)
                 if doc:
                     with open(output_path(args, stem), "w") as f:
                         f.write(json.dumps(doc) + "\n")     # one line, like batch: evaluate.py reads JSON lines
@@ -423,7 +417,7 @@ def main() -> None:
                     c_entry = {"offset": c["offset"], "encode": c["encode"]}
                     entry["chunks"].append(c_entry)
                     log(f"  chunk {c['offset']:5.1f}-{c['offset'] + c['duration']:5.1f} s  ({c['encode']}, {c['bytes']:,} B)")
-                    doc = query_video(agent, c["file"], sop, stem, args.repeat, deadline, seen, c_entry)
+                    doc = query_video(session, c["file"], sop, stem, args.repeat, deadline, seen, c_entry)
                     c["rows"] = doc["results"] if doc else None
             finally:
                 if any(c.get("rows") is not None for c in plan["chunks"]):
@@ -431,13 +425,14 @@ def main() -> None:
                         json.dump({"clip": stem, "sop": args.sop, **plan}, f, indent=2)
     except AgentGone as e:
         sweep_log["stopped"] = str(e)
-        log(f"STOPPED: the agent no longer answers ({e}).\n"
+        log(f"STOPPED: the session no longer answers ({e}).\n"
             f"  Answers so far are saved; run the same command again to resume where it stopped.")
     finally:
         if args.keep:
-            log(f"agent {agent} left running (--agent {agent}); released after 20 idle min")
+            log(f"session {session} left running (--session {session}); closed after 30 idle min, "
+                f"and its deployment {deployment} stays up until cleanup.py")
         else:
-            log(release(agent, bundle))
+            log(release(session, deployment, setting))
         sweep_log["seconds"] = round(time.time() - t0)
         with open(os.path.join(args.out_dir, "sweep-log.json"), "w") as f:
             json.dump(sweep_log, f, indent=2)

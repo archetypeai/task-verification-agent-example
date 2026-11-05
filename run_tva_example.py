@@ -20,8 +20,13 @@ Budget 20-30 MINUTES, not the ~13 of job time. The job itself is 754-1614 s once
 starts — ~7 min of model download and load on EVERY run, nothing cached between
 runs, then generation — and THE QUEUE IS ON TOP OF THAT. Dev has one GPU shared
 across orgs; waits from 12 s to 796 s have been observed, and one 17-minute job took
-41 minutes of wall clock. Ten silent minutes means queued, not hung: look for
-`job.admitted` in the /logs stream this script prints.
+41 minutes of wall clock (measured with bundles). Ten silent minutes means queued,
+not hung: the session stays `pending` until it is dispatched.
+
+On the Agent Lifecycle 2.0 a run is: the project's copy of `tva` at this run's
+max_frames, size and max_new_tokens (made once per setting, see tva_project.py),
+its package and batch deployment (also once per setting), and one batch session
+over the video and the SOP. state/lifecycle.json keeps the ids.
 
 WHAT IS DIFFERENT FROM THE MGA EXAMPLE, and it is the whole point:
 
@@ -39,12 +44,14 @@ THINGS THAT WILL BITE YOU (all verified on dev, 2026-08-11)
   1. `connectors.source[].id` wants the file BASENAME, which is what the files API
      returns as `file_id` — not the `fil_...` `file_uid` in the same response.
 
-  2. The bundle endpoint is PLURAL: POST /agents/bundles. The singular 404s.
+  2. A package, a deployment and a batch session take NO values. They are set on
+     the blueprint copy (`overrides.values`), one copy per setting.
 
-  3. Starting a run returns 202, not 201.
+  3. A session has no /logs, only /events. The parser's "generation ended inside
+     the reasoning block" warning is not visible any more: a session that hit it
+     ends `completed` with `results: []`. Count the verdicts.
 
-  4. Poll /logs, not /events, and ignore the instance `status` field — it has
-     reported `running` 20+ minutes after a pod died with exit=1.
+  4. A session's `status` is the run's: poll it, not a log stream.
 
   5. There is NO `prompt` value on this blueprint. The system message lives
      inside TaskVerificationPromptGeneratorNode. Your SOP is the only thing you
@@ -64,6 +71,7 @@ import re
 import sys
 
 import tva_api as api
+import tva_project as project
 from background import add_background_flag, maybe_detach
 
 # The default clip: 31 s, 640x480, three steps all performed correctly. The
@@ -150,7 +158,7 @@ def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
 STATUSES = ("PASSED", "FAILED", "MISSING")
 
 # --repro-empty: a run that reports success and returns no verdicts at all.
-# `job.completed`, no ERROR row, an empty `results` list.
+# A `completed` session, no error, an empty `results` list.
 #
 # WHAT THIS REPRODUCES, and what it does not. Raising the budget is NOT a general
 # fix — two clips returned empty at the ceiling in the 12-clip sweep — but a low
@@ -337,14 +345,14 @@ def show(path: str, video: str | None = None) -> None:
                   f"  duplicates were identical. See the README on repetition.")
         results = shown
         if not results:
-            print("  NO STEPS PARSED — the run reported job.completed and "
+            print("  NO STEPS PARSED — the session ended completed and "
                   "returned an empty results list.\n"
                   "  The usual cause is the token budget being spent inside the "
                   "model's <think>\n"
-                  "  reasoning block, so no verdicts were ever emitted. Check "
-                  "/logs for\n"
-                  "  'generation ended inside the model's reasoning block' and "
-                  "raise --max-new-tokens.\n"
+                  "  reasoning block, so no verdicts were ever emitted. Try "
+                  "--max-new-tokens\n"
+                  "  5760, the budget that returned verdicts here (see the "
+                  "README).\n"
                   "  Clips where a step was SKIPPED need a bigger budget than "
                   "clean ones.")
         for r in results:
@@ -411,7 +419,7 @@ def repro_symptoms(payload: bytes | None) -> list[tuple[str, bool, str]]:
     ]
 
 
-def repro_report(payload: bytes | None, verdict: str, agent_id: str) -> None:
+def repro_report(payload: bytes | None, verdict: str, session_id: str) -> None:
     """Print CONFIRMED / NOT REPRODUCED per symptom, and what it means."""
     print("\n" + "=" * 72)
     print("EMPTY-OUTPUT REPRODUCTION")
@@ -420,17 +428,15 @@ def repro_report(payload: bytes | None, verdict: str, agent_id: str) -> None:
     for desc, ok, detail in results:
         print(f"  {'CONFIRMED    ' if ok else 'NOT REPRODUCED'}  {desc}\n"
               f"                  observed: {detail}")
-    # The verdict from the log stream matters as much as the bytes: the whole point
-    # is that the job does not report failure.
-    print(f"\n  run verdict from /logs: {verdict}")
-    if verdict == "empty-reasoning-overflow":
-        print("    -> the parser reported that generation ended inside the model's\n"
-              "       reasoning block, so no verdict was ever emitted. THIS is the\n"
-              "       diagnostic; the job itself reports completed.")
-    elif verdict == "completed":
-        print("    -> reported as a clean completion. Note there was no WARN about\n"
-              "       the reasoning block, so if the output is empty this is the\n"
-              "       OTHER empty-output mode: the parser matched nothing at all.")
+    # The session's status matters as much as the bytes: the whole point is that
+    # the run does not report failure.
+    print(f"\n  session status: {verdict}")
+    if verdict == "completed":
+        print("    -> reported as a clean completion. A session has no /logs, so the\n"
+              "       parser's warning that generation ended inside the reasoning\n"
+              "       block is not visible: the empty `results` list is the only\n"
+              "       diagnostic. (It is also what the parser matching nothing at\n"
+              "       all looks like; the bundle-era /logs told the two apart.)")
 
     if all(ok for _, ok, _ in results):
         digest = hashlib.md5(payload).hexdigest()
@@ -448,7 +454,7 @@ def repro_report(payload: bytes | None, verdict: str, agent_id: str) -> None:
               "  reasons, so this is not perfectly deterministic. Try\n"
               "  --repro-empty on a clip with more than one skipped step, or lower\n"
               "  --max-new-tokens further.")
-    print(f"\n  full log: {api.agents_base()}/instances/{agent_id}/logs")
+    print(f"\n  session: {api.sessions_url(session_id)}  (and /events)")
     print("=" * 72)
 
 
@@ -463,7 +469,7 @@ def repro_analyse(path: str) -> None:
         print(f"  {'CONFIRMED    ' if ok else 'NOT REPRODUCED'}  {desc}\n"
               f"                  observed: {detail}")
     print(f"\n  md5 {hashlib.md5(payload).hexdigest()}")
-    print("\n  This is what `job.completed` with no ERROR row can look like.\n"
+    print("\n  This is what a `completed` session with no error can look like.\n"
           "  Reproduce it live with:  python3 run_tva_example.py --repro-empty")
 
 
@@ -471,9 +477,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--video", default=VIDEO_PATH)
     ap.add_argument("--blueprint", default=BLUEPRINT_DEFAULT,
-                    help=f"blueprint id or KEY (default: {BLUEPRINT_DEFAULT!r}). "
-                         f"A key tracks whatever is canonical and active; a pinned "
-                         f"id can stop resolving when the blueprint is republished.")
+                    help=f"the blueprint to copy into the project, by id or KEY "
+                         f"(default: {BLUEPRINT_DEFAULT!r}). A key copies whatever "
+                         f"is canonical and active; an id copies that version.")
     ap.add_argument("--max-frames", type=int, default=64,
                     help="frames uniformly sampled across the whole video. The "
                          "blueprint default is 16, which on a 30 s clip is one "
@@ -513,7 +519,6 @@ def main() -> None:
                          f"(default: {DEFAULT_SOP_PATH}). The SOP is the ONLY "
                          f"thing you control on this blueprint — there is no "
                          f"`prompt` value — so this file is the whole lever.")
-    ap.add_argument("--name", default="TVA o-ring cap assembly")
     ap.add_argument("--output", default=None,
                     help="where to save the result (default: tva-output-<clip>.json). "
                          "The tva sink is json/per-request, so the payload is JSON.")
@@ -523,7 +528,7 @@ def main() -> None:
                     help="print the exact payloads and stop — no API calls")
     ap.add_argument("--repro-empty", action="store_true",
                     help="reproduce the EMPTY-OUTPUT failure: a run that reports "
-                         "job.completed with no ERROR and returns no verdicts. "
+                         "completed with no error and returns no verdicts. "
                          "Overrides --video/--max-frames/--size/--max-new-tokens "
                          "with the configuration known to trigger it, then reports "
                          "each symptom as CONFIRMED or NOT REPRODUCED. ~13 min of "
@@ -567,7 +572,7 @@ def main() -> None:
               f"{'   <-- the MAXIMUM the context window allows' if at_ceiling else '   (below the ceiling of %d)' % ceiling}\n"
               f"  max_frames      {args.max_frames}, size {args.size}\n"
               f"  SOP             {args.sop or DEFAULT_SOP_PATH} (unmodified)\n\n"
-              f"  Expect: job.completed, NO ERROR row, and results: [] — ~44 bytes.\n")
+              f"  Expect: a completed session, NO error, and results: [] — ~44 bytes.\n")
         print(f"  A low budget is the RELIABLE TRIGGER, not the root cause. The\n"
               f"  underlying pathology is repetition: the model emits the verdict\n"
               f"  block over and over, and where the budget runs out decides what\n"
@@ -598,15 +603,22 @@ def main() -> None:
 
     if args.dry_run:
         endpoint = api.api_base()
-        print(f"POST {endpoint}/agents/bundles")
-        print(json.dumps({"blueprint": args.blueprint, "name": args.name,
-                          "values": values}, indent=2))
-        print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
+        key = project.setting_key(values, args.blueprint)
+        print("once per setting (reused while state/lifecycle.json holds it):\n")
+        print(f"POST {endpoint}/agents/blueprints/{args.blueprint}/copy")
+        print(json.dumps({"project_id": f"<{project.PROJECT}>", "blueprint_key": key,
+                          "overrides": {"values": values}}, indent=2))
+        print(f"POST {endpoint}/agents/packages")
+        print(json.dumps({"blueprint_ids": ["<the copy>"], "target": {"kind": "platform"}},
+                         indent=2))
+        print(f"POST {endpoint}/agents/deployments")
+        print(json.dumps({"package_id": "<the package>", "kind": "batch"}, indent=2))
+        print(f"\nper run:\n\nPOST {endpoint}/agents/sessions")
         v_name, s_name = pair_names(clip, args.sop, args.pair_sop,
                                     os.path.basename(args.video)
                                     if os.path.splitext(args.video)[1] else None,
                                     suffix=api.run_suffix())
-        print(json.dumps({"connectors": {"source": [
+        print(json.dumps({"deployment_id": "<the deployment>", "connectors": {"source": [
             {"type": "file", "id": v_name, "format": "mp4"},
             {"type": "file", "id": s_name, "format": "txt"},
         ]}}, indent=2))
@@ -628,7 +640,8 @@ def main() -> None:
 
     # Preflight BEFORE uploading. A value the blueprint silently ignores should
     # be reported before spending 9 minutes of GPU, not after. This reads the
-    # blueprint document, so it needs no maintenance when the blueprint changes.
+    # document of the blueprint the copy is made from, so it needs no maintenance
+    # when the blueprint changes.
     bp = api.get_blueprint(args.blueprint)
     doc = bp["document"]
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, "
@@ -690,30 +703,42 @@ def main() -> None:
     if video_id.rsplit(".", 1)[0] == sop_id.rsplit(".", 1)[0]:
         print(f"  stems match — nothing else writes to this pair")
 
-    # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and
-    # whisper:large-v3 itself, same as mga and unlike red/osm.
-    bundle = api.create_bundle(args.blueprint, args.name, values)
-    print(f"creating bundle ...\n  bundle_id={bundle['id']}  "
-          f"status={bundle.get('status')}")
+    # The setting's copy, package and batch deployment: made on the first run at
+    # this setting, reused after. No model is named: the tva blueprint pins
+    # newton-fusion and whisper itself, same as mga and unlike red/osm.
+    print(f"\nthe agent for {project.setting_key(values, args.blueprint)} ...")
+    rec = project.agent(values, "batch", source=args.blueprint)
+    print(f"  copy {rec['blueprint']}  package {rec['package']}  "
+          f"deployment {rec['batch']}")
 
-    agent_id = api.run(bundle["id"], video_id, sop_id)
-    print(f"started run\n  agent_id={agent_id}\n"
-          f"  watching /logs (~7 min of model loading first) ...")
+    session_id = api.open_session(rec["batch"], video_id, sop_id)["id"]
+    project.record_session(session_id, setting=rec["key"], kind="batch", clip=clip,
+                           out=out_path)
+    print(f"started session\n  session_id={session_id}\n"
+          f"  watching its status and /events (~7 min of model loading first) ...")
 
-    verdict = api.poll_logs(agent_id)
-    print(f"\nrun {verdict}")
+    try:
+        verdict = api.poll_session(session_id)
+    except KeyboardInterrupt:
+        # Never leave a run on the GPU: an abandoned run blocks everyone behind it.
+        print(f"\ninterrupted — cancelling {session_id}")
+        api.cancel_session(session_id)
+        sys.exit(130)
+    print(f"\nsession {verdict}")
 
-    payload = api.fetch_results(agent_id, out_path)
+    payload = api.fetch_results(session_id, out_path)
     if payload is not None:
         print(f"  saved {out_path} ({len(payload)} bytes, "
               f"md5 {hashlib.md5(payload).hexdigest()})")
         show(out_path, video=args.video)
     if args.repro_empty:
-        repro_report(payload, verdict, agent_id)
+        repro_report(payload, verdict, session_id)
         return
     if verdict != "completed":
-        sys.exit(f"run {verdict} — full log: "
-                 f"{api.agents_base()}/instances/{agent_id}/logs")
+        sys.exit(f"session {verdict} — {api.sessions_url(session_id)}/events")
+    if api.empty_output(payload):
+        sys.exit("session completed with results: [] — no verdicts (see the README "
+                 "on the token budget)")
 
 
 if __name__ == "__main__":
