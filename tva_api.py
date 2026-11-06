@@ -635,6 +635,15 @@ def wait_running(session_id: str, timeout_s: int = 1800) -> dict:
     return _wait_for(sessions_url(session_id), "running", "pending", timeout_s, every_s=10)
 
 
+def local_time(stamp) -> str:
+    """An event's UTC `created_at` as local HH:MM:SS, like the script's own lines."""
+    try:
+        return datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00")) \
+            .astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return str(stamp)[11:19]
+
+
 def poll_session(session_id: str, timeout_s: int = 3600, interval_s: int = 20,
                  quiet: bool = False) -> str:
     """Poll a batch session until it ends, printing its events as they appear.
@@ -659,7 +668,7 @@ def poll_session(session_id: str, timeout_s: int = 3600, interval_s: int = 20,
                 continue
             seen.add(marker)
             if not quiet:
-                print(f"  {str(ev.get('created_at'))[11:19]} "
+                print(f"  {local_time(ev.get('created_at'))} "
                       f"{str(ev.get('level', 'info')):7} {ev.get('message')}")
         if ses["status"] in TERMINAL:
             if ses.get("error") and not quiet:
