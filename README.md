@@ -992,7 +992,8 @@ the serving deployment, which is what holds the GPU worker; `--keep` leaves both
 running for `--session`, and `cleanup.py` removes them later.
 
 The measurements below were made with bundles, on a serving *instance* of the `tva`
-bundle; the query and its answer are unchanged.
+bundle; the query and its answer are unchanged. Rerun on 2026-11-06 with a serving
+deployment, all 12 answers came back byte-identical.
 
 > **Agent serving is available on dev only, as of 2026-10-28.** Not on prod or
 > staging yet: batch (Stages 4 and 5) is what prod offers.

@@ -155,15 +155,13 @@ Statuses: package `building → ready | failed`; deployment `deploying → ready
 
 ## Results
 
-The results in the README were measured with bundles. To be filled in from a
-production rerun of the 12-clip baseline (`sweep.py --all --submit-all --out-dir
-eval_lc2`) and Stage 6 (`sweep_serve.py --all`), against `eval_prod/` and
-`eval_serving/`:
+The results in the README were measured with bundles. On this branch, on a deployment
+that serves the new calls (2026-11-05 and -06), both reruns gave the same answers:
 
-| Run | Measure | Lifecycle 2.0 | Bundles |
-|---|---|---|---|
-| 12-clip batch | step accuracy, o-ring omissions caught, empty results | — | see the README |
-| Stage 6 serving | verdicts against batch, seconds per clip | — | see the README |
+| Run | Lifecycle 2.0 | Bundles |
+|---|---|---|
+| 12-clip batch (`sweep.py --all --submit-all --out-dir eval_lc2`) | 28/36 steps (step 1 7/12, step 2 12/12, step 3 9/12); every clip `completed` with 3 verdicts; `results` equal to `eval_prod/` for 12 of 12 clips | 28/36, `eval_prod/` |
+| Stage 6 serving (`sweep_serve.py --all --out-dir eval_serving_lc2`) | 12 outputs byte-identical to `eval_serving/`: 28/36 steps (step 1 6/12, step 2 12/12, step 3 10/12); the serving deployment took 693 s to start, then 2.8–8.0 s per clip (3.3 s median); 739 s in all | `eval_serving/` |
 
 ## Moving your own scripts
 
