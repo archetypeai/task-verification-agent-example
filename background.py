@@ -9,10 +9,10 @@ Adapted from the LARCO quickstart's prep/background.py.
     args = ap.parse_args()
     maybe_detach(args)          # returns only in the foreground run
 
-Two differences from LARCO's: caffeinate watches the run (`-w <pid>`) instead of wrapping
-it, so the pid printed is the Python process and `kill <pid>` reaches it; and SIGTERM is
-raised as KeyboardInterrupt, so `kill` takes the same cleanup path as Ctrl-C. That matters
-here: a sweep killed without cleanup leaves a run, or a serving agent, on dev's only GPU.
+caffeinate watches the run (`-w <pid>`), so the pid printed is the Python process and
+`kill <pid>` reaches it, and SIGTERM is raised as KeyboardInterrupt, so `kill` takes the
+same cleanup path as Ctrl-C: a sweep killed without cleanup leaves a run, or a serving
+deployment, holding a GPU.
 """
 import os
 import shutil

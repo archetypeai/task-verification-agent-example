@@ -2,7 +2,7 @@
 """Score TVA outputs against the ground truth encoded in each clip's filename.
 
 Offline and stdlib-only: no API key, no network, no GPU. A run happens once and
-costs ~9 minutes of a shared GPU, but you will read its numbers many times, so
+costs ~10 minutes of GPU, but you will read its numbers many times, so
 scoring is a separate free step that reads committed files.
 
     python3 evaluate.py reference/*.json           # score every committed run
@@ -107,8 +107,7 @@ def load(paths: list[str]) -> list[tuple[str, dict, str]]:
 def by_step(rec: dict) -> dict[int, dict]:
     """{step_number: row}, normalising the parser's step numbering to 1-based.
 
-    The design doc says `step: <int>` and does not say where it starts. It is
-    0-based — verified on real runs, and the same as MGA's parser. Detected here
+    The parser's `step` is 0-based — verified on real runs, and the same as MGA's parser. Detected here
     rather than assumed, because an off-by-one produces plausible wrong
     alignments instead of an error: a perfect 3-step run misreads as two hits
     and a missing third step.

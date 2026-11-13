@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Run TVA across several labelled clips, one at a time, and save each output.
 
-A single run is ~13 minutes of job time (754-1614 s observed) and dev has ONE GPU
-that serializes jobs, so this is deliberately sequential: submitting concurrently
-produces queue waits rather than parallelism — 796 s observed for one clip that
-queued behind another. Twelve clips is therefore 2.5-3 hours of wall clock. Budget
-accordingly, and prefer --clips to pick a subset.
+A single run is ~10-15 minutes of job time, so this is sequential by default:
+twelve clips one after another is 2-3 hours of wall clock. --submit-all queues them
+all up front instead (51 min for twelve on production, which ran two at once).
+Budget accordingly, and prefer --clips to pick a subset.
 
 Almost all of that is cold start: ~7 minutes of model download and load happens on
 EVERY run and is never cached, so the marginal cost of one more clip in a sweep is
@@ -27,7 +26,7 @@ WHY A SEPARATE SCRIPT from run_tva_example.py: that one is the readable
 end-to-end path for a single clip and prints everything. This one is the batch
 path — it keeps going when a clip fails, records what happened, and never leaves
 a run orphaned on the GPU. If you interrupt it, it cancels the in-flight session
-before exiting, because an abandoned run blocks everyone else on dev.
+before exiting, because an abandoned run holds a GPU.
 
 Every clip runs as one batch session on ONE deployment for the sweep's setting:
 the project's copy of `tva` at --max-frames/--size/--max-new-tokens, its package
@@ -70,12 +69,10 @@ def upload_pair(args, path: str, stem: str, steps: list[str],
     disagree about what a run's inputs are called:
 
       default      <clip>-<sop>.mp4 + <clip>-<sop>.txt   stems match AND name the SOP
-      --pair-sop   <clip>.mp4       + <clip>.txt         the platform team's form
+      --pair-sop   <clip>.mp4       + <clip>.txt         the clip's stem only
       shared       <clip>.mp4       + <sop>.txt          one SOP object for the sweep
 
-    `shared` is only used for the third case, which is what a 1:1 run can get away
-    with: the unpaired 12-clip sweep in reference/sweep/ returned verdicts for 10 of
-    12 clips with mismatched stems.
+    `shared` is only used for the third case, which a 1:1 run can get away with.
     """
     if shared is not None:
         return api.upload_file(path), shared
@@ -95,14 +92,9 @@ def submit_all(args, rec: dict, sop_id: str | None, clips: list[str],
                steps: list[str]) -> None:
     """Submit every run before collecting any, then poll them in order.
 
-    Sequential submission leaves the GPU unclaimed between clips, and dev is
-    shared across orgs — a job you cannot see can take the slot, which is the most
-    likely explanation for an 11-minute gap observed between `job.admitted` and a
-    pod starting. Submitting up front holds the positions.
-
-    On dev it bought queue position, not parallelism: one GPU ran one job at a
-    time. Prod ran two at once on 2026-10-26, so there it also halves the wall
-    clock.
+    Sequential submission leaves the GPU unclaimed between clips, and another job
+    can take the slot. Submitting up front holds the positions, and production ran
+    two at once, so it also roughly halves the wall clock.
     And it removes the safety property of the sequential path, where a
     misconfiguration costs one run rather than all of them — so the sequential
     path stays the default.
@@ -255,7 +247,7 @@ def main() -> None:
     ap.add_argument("--submit-all", action="store_true",
                     help="submit every run UP FRONT, then collect results, "
                          "instead of waiting for each before starting the next. "
-                         "Does not make the GPU faster — dev serializes — but it "
+                         "Does not make each run faster, but it "
                          "holds your place in the queue so another org's job "
                          "cannot slip in between your clips. The cost: a "
                          "misconfiguration burns every run instead of the first, "
@@ -275,8 +267,7 @@ def main() -> None:
                          "the idempotent skip fires so no video is re-uploaded — but "
                          "stems do not match, the platform cannot later tell you which "
                          "SOP a run used, and a concurrent user writes to the same ids "
-                         "and can destroy your queued runs. SOLO USE ONLY. This was the "
-                         "old default and is how reference/sweep/ was produced.")
+                         "and can destroy your queued runs. SOLO USE ONLY.")
     ap.add_argument("--pair-sop", action="store_true",
                     help="upload one SOP per clip named <clip-stem>.txt, from "
                          "sop/paired/ when present. The pipeline pairs video and "
@@ -311,9 +302,8 @@ def main() -> None:
     # stems already differ, so per-clip uniqueness is preserved.
     args._suffix = api.run_suffix()
 
-    # --fresh REPLACES outputs, and reference/ holds the committed evidence every
-    # number in the README is scored from. Losing it costs 2.6 h of shared GPU to
-    # regenerate, and the regenerated runs would not be the ones the README cites.
+    # --fresh REPLACES outputs, and reference/ holds the committed results the README
+    # is scored from.
     if args.fresh and os.path.normpath(args.out_dir).split(os.sep)[0] == "reference":
         sys.exit(f"refusing --fresh into {args.out_dir}: reference/ is committed "
                  f"evidence, not a scratch directory.\n"
@@ -424,7 +414,7 @@ def main() -> None:
             for stem in done:
                 print(f"  {stem:<32s} {label_str(stem)}")
         # --submit-all changes WHEN runs are submitted. How many execute at once is
-        # the platform's call: one on dev, two on prod (2026-10-26).
+        # the platform's call (two at once on production).
         mode = ("all submitted up front, then collected in order — the platform "
                 "decides how many run at once" if args.submit_all
                 else "submitted one at a time")
@@ -445,7 +435,7 @@ def main() -> None:
             for p in clips):
         sys.exit(f"nothing to run: all {len(clips)} clip(s) already have an output "
                  f"in {args.out_dir}/.\n"
-                 f"  To run them again, write elsewhere (--out-dir eval_prod) "
+                 f"  To run them again, write elsewhere (--out-dir eval_rerun) "
                  f"or replace them (--fresh).")
     bp = api.get_blueprint(args.blueprint)
     inert = api.inert_values(bp["document"], values)
@@ -470,7 +460,7 @@ def main() -> None:
     sop_id = None
     if args.shared_sop:
         # One SOP object for the whole sweep. Cheapest, and stems do NOT match — fine
-        # for 1:1 runs (reference/sweep/ was made this way), but it means the platform
+        # for 1:1 runs, but it means the platform
         # cannot tell you afterwards which SOP a given run was given.
         sop_id = upload_sop(args.sop, steps)
         print(f"SOP uploaded as {sop_id} (ONE object shared by all clips; "
@@ -529,8 +519,7 @@ def main() -> None:
             log.append({"clip": stem, "session_id": session_id, "verdict": verdict,
                         "steps": n, "seconds": round(time.time() - t0)})
         except KeyboardInterrupt:
-            # Never leave a run on the GPU. Dev has one, and an abandoned run
-            # blocks everyone until it times out.
+            # Never leave a run on the GPU: an abandoned run holds it until it times out.
             if session_id:
                 print(f"\n  interrupted — cancelling {session_id}")
                 api.cancel_session(session_id)

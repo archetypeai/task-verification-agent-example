@@ -9,7 +9,7 @@
 
     python3 sweep_serve.py --all --chunk 4 --dry-run   # cut, print the plan, call nothing
     python3 sweep_serve.py --all --chunk 10 --overlap 4
-    python3 merge_chunks.py eval_serving_c10o4         # merge the chunks per rule, score each
+    python3 merge_chunks.py eval_serving         # merge the chunks per rule, score each
 
 With --chunk, each clip goes as several shorter videos instead of one, each
 verified against the whole SOP, and every chunk's raw answer is saved to
@@ -23,8 +23,7 @@ tva_project.py) as `serving` and opens one session on it: the model loads once
 and the session answers POST /agents/sessions/{id}/query for each clip, so
 twelve clips cost one load plus twelve answers instead of twelve loads.
 
-Limits, as measured with bundles on dev (2026-10-28):
-  - one GPU worker at a time on dev; another is refused while it's busy
+Limits:
   - the video goes inline (`"file_ids": ["base64:<mp4>"]`) and the whole body is
     capped at 2 MiB, so every clip is re-encoded to fit, into data/clips-serving/.
     TVA samples 64 frames at 224 px, so 640x480 at CRF 28 loses little, but the
@@ -56,9 +55,8 @@ from sweep import label_str
 OUT_DIR = "eval_serving"
 CLIP_CACHE = "data/clips-serving"
 BODY_CAP = 2 * 1024 * 1024
-# A chunk with fewer frames than the blueprint's max_frames ceiling (64): on dev
-# (2026-10-26) a 35-frame tail chunk ended the served agent (since fixed), and a
-# 40-frame one took 10x longer to answer.
+# A chunk with fewer frames than the blueprint's max_frames ceiling (64): a 40-frame
+# one took 10x longer to answer.
 MIN_CHUNK_FRAMES = 64
 # Tried in order until the request fits: full resolution first, since frames are
 # what the model sees.

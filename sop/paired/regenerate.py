@@ -3,7 +3,7 @@
 
     python3 sop/paired/regenerate.py                       # write from oring-numbered.txt
     python3 sop/paired/regenerate.py --check               # verify only, non-zero if stale
-    python3 sop/paired/regenerate.py --sop sop/oring.txt   # pair a different SOP
+    python3 sop/paired/regenerate.py --sop my-sop.txt   # pair a different SOP
 
 These files are DERIVED. Editing one by hand makes it silently disagree with its
 source, and because the pipeline pairs a video to its SOP by stem, the wrong text

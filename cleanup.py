@@ -33,7 +33,7 @@ URLS = {"sessions": api.sessions_url, "deployments": api.deployments_url,
 
 def listing(kind: str, **query) -> list[str]:
     q = "&".join(f"{k}={v}" for k, v in query.items())
-    return [r["id"] for r in api.request("GET", f"{URLS[kind]()}?{q}&limit=1000")["data"]]
+    return [r["id"] for r in api.list_all(f"{URLS[kind]()}?{q}")]
 
 
 def main() -> int:
@@ -78,9 +78,9 @@ def main() -> int:
             gone.add(obj)
             continue
         if kind == "sessions" and info.get("status") not in api.TERMINAL:
-            api.request("POST", f"{URLS[kind](obj)}/cancel", body={}, allow_status=True)
+            api.request("POST", f"{URLS[kind](obj)}/cancel", body={}, allow_status=True, idempotent=True)
         if kind == "deployments" and info.get("status") not in ("stopped", "failed"):
-            api.request("POST", f"{URLS[kind](obj)}/stop", body={}, allow_status=True)
+            api.request("POST", f"{URLS[kind](obj)}/stop", body={}, allow_status=True, idempotent=True)
         code, body = api.request("DELETE", URLS[kind](obj), raw=True, allow_status=True)
         if 200 <= code < 300 or code == 404:
             gone.add(obj)

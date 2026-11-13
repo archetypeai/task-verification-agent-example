@@ -2,7 +2,7 @@
 """Merge sweep_serve.py --chunk answers into one verdict per step, per rule, and score each.
 
     python3 merge_chunks.py eval_serving_c4
-    python3 merge_chunks.py eval_serving_c10o4 --rules any majority
+    python3 merge_chunks.py eval_serving --rules any majority
 
 Every chunk is verified against the whole SOP, so most steps come back MISSING in
 most chunks. A rule decides the clip's verdict for a step from the chunks that

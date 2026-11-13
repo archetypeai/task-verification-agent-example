@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Minimal stdlib-only client for the Archetype AI Agent API, for TVA.
 
-Shared by run_tva_example.py, sweep.py, sweep_serve.py, iterate_sop.py and
-cleanup.py. Auth and endpoint come from the environment, with a local .env
+Shared by run_tva_example.py, sweep.py, sweep_serve.py and cleanup.py. Auth and endpoint come from the environment, with a local .env
 loaded if present:
 
     ATAI_API_KEY=<API key>
@@ -29,6 +28,7 @@ session is one run over one video and its SOP; a serving session answers
 from __future__ import annotations
 
 import datetime
+import http.client
 import json
 import mimetypes
 import os
@@ -68,9 +68,8 @@ def api_base() -> str:
 def files_root() -> str:
     """Where the files API and run-output refs resolve.
 
-    The platform.* endpoints (`https://platform[.dev].u1.archetypeai.app/api`)
-    serve files at `<endpoint>/files`; the legacy api.* hosts served them at
-    `<endpoint>/v0.5/files`. /agents is at `<endpoint>/agents` on both.
+    An endpoint ending in /api serves files at `<endpoint>/files`; an older one
+    without it, at `<endpoint>/v0.5/files`.
     """
     endpoint = api_base()
     return endpoint if endpoint.endswith("/api") else f"{endpoint}/v0.5"
@@ -89,17 +88,23 @@ def agents_base() -> str:
 
 
 def request(method: str, url: str, body=None, raw: bool = False,
-            retries: int = 4, allow_status: bool = False, timeout: int = 120):
-    """Call the API, retrying transient network failures.
+            retries: int = 4, allow_status: bool = False, timeout: int = 120,
+            idempotent: bool | None = None):
+    """Call the API, retrying transient failures (network errors, 502/503/504).
 
     Runs are polled for up to an hour, and a DNS hiccup should not kill the
-    client while the platform job carries on burning GPU unattended. Only
-    *network* errors retry; an HTTP status is a real answer from the server.
+    client while the platform job carries on burning GPU unattended. Only calls
+    that are safe to repeat retry: GET, HEAD and DELETE, and POSTs marked
+    idempotent (cancel, stop). A create POST never retries: a repeat could make a
+    second object nothing records, such as a deployment holding a GPU. Any other
+    HTTP status is a real answer from the server.
 
     allow_status=True returns (status, body) instead of exiting, which is what
     discovery needs — a 404 is a finding, not a crash.
     """
     require_key()
+    if not (method in ("GET", "HEAD", "DELETE") if idempotent is None else idempotent):
+        retries = 0
     data = json.dumps(body).encode() if body is not None else None
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=data, method=method)
@@ -117,10 +122,16 @@ def request(method: str, url: str, body=None, raw: bool = False,
                 return (resp.status, out) if allow_status else out
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")
+            if e.code in (502, 503, 504) and attempt < retries:
+                wait = 5 * (2 ** attempt)
+                print(f"  {method} {url}: HTTP {e.code}; retrying in {wait}s [{attempt + 1}/{retries}]")
+                time.sleep(wait)
+                continue
             if allow_status:
                 return e.code, detail
             sys.exit(f"{method} {url} failed ({e.code}): {detail}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.HTTPException) as e:          # incl. a body cut off mid-transfer
             if attempt == retries:
                 if allow_status:
                     return 0, str(e)
@@ -351,7 +362,6 @@ def inert_values(doc: dict, values: dict) -> list[str]:
 #
 # The platform validates the graph AFTER downloading and loading both models, so
 # the failure costs the full cold start — 996 s observed — and leaves no results.
-# Nothing in the bundle response hinted at it: the bundle was `status: ready`.
 #
 # There is no endpoint that lists registered connectors, so this is an allowlist
 # of what has run plus the one value observed to be broken. It reads the blueprint
@@ -373,7 +383,7 @@ def check_sink(doc: dict) -> str | None:
     """Return a warning if the blueprint's sink looks un-instantiable, else None."""
     fmt = ((doc.get("connectors") or {}).get("sink") or {}).get("config", {}).get("format")
     if fmt in KNOWN_BROKEN_SINK_FORMATS:
-        return (f"sink format {fmt!r} has NO REGISTERED CONNECTOR on dev. This run "
+        return (f"sink format {fmt!r} has NO REGISTERED CONNECTOR. This run "
                 f"will load both models (~7 min) and then die at graph "
                 f"instantiation with no results.\n"
                 f"    Pin a blueprint whose sink is one of "
@@ -399,8 +409,7 @@ def check_sink(doc: dict) -> str | None:
 # max_new_tokens 6928 = 9304 completed cleanly, with no warning — so the window is
 # now larger than 9304 and this constant was refusing valid configurations.
 #
-# The node schema's own ceiling is 262144 (256K), which matches the context the
-# design doc advertises, so the served window may now be anywhere in (9304, 262144].
+# The node schema's own ceiling is 262144 (256K), so the served window may now be anywhere in (9304, 262144].
 # It is NOT exposed as a blueprint value, so it cannot be read — only bracketed by
 # runs. Treated as a floor rather than a limit: the preflight now warns instead of
 # refusing, because a stale constant that blocks good work is worse than one that
@@ -461,7 +470,7 @@ VISION_TOKENS_PER_STEP = 49
 # the estimate low enough to be rejected at fusion time — after ~7 min of loading.
 #
 # So the constant below is the SOP-FREE part, and the SOP is measured separately.
-BASELINE_SOP_TOKENS = 69          # sop/oring.txt, 276 chars at ~4 chars/token
+BASELINE_SOP_TOKENS = 69          # the bare 3-step SOP, 276 chars at ~4 chars/token
 SYSTEM_TOKEN_OVERHEAD = 800 - BASELINE_SOP_TOKENS
 CHARS_PER_TOKEN = 4               # crude, and deliberately so — see estimate below
 
@@ -475,9 +484,8 @@ def estimate_sop_tokens(sop_text_or_path: str | None) -> int:
         with open(sop_text_or_path) as fh:
             # Count only what is actually UPLOADED. load_sop() drops blank lines and
             # # comments, so counting the raw file charges the prompt for commentary
-            # the model never sees — sop/oring-sealant.txt has a 9-line rationale
-            # block that inflated the estimate by ~125 tokens and made the budget
-            # warning fire on a run that was nowhere near the ceiling.
+            # the model never sees, which can inflate the estimate enough to make
+            # the budget warning fire on a run nowhere near the ceiling.
             text = "".join(l for l in fh
                            if l.strip() and not l.lstrip().startswith("#"))
     # Round up: an underestimate is rejected at fusion time after the cold start,
@@ -556,15 +564,19 @@ def sessions_url(session_id: str = "") -> str:
     return f"{base}/{session_id}" if session_id else base
 
 
-def _wait_for(url: str, status: str, waiting: str, timeout_s: int, every_s: int = 5) -> dict:
+def _wait_for(url: str, status: str, waiting: str, timeout_s: int, every_s: int = 5,
+              exit: bool = True) -> dict:
+    """Poll while `waiting`; exit unless it then reaches `status` (exit=False: return it as is)."""
     obj = request("GET", url)
     t0 = time.time()
     while obj["status"] == waiting:
         if time.time() - t0 > timeout_s:
+            if not exit:
+                return obj
             sys.exit(f"{obj['id']} still {waiting} after {timeout_s} s")
         time.sleep(every_s)
         obj = request("GET", url)
-    if obj["status"] != status:
+    if obj["status"] != status and exit:
         sys.exit(f"{obj['id']} is {obj['status']}, not {status}: {obj.get('error')}")
     return obj
 
@@ -573,9 +585,8 @@ def copy_blueprint(source: str, project_id: str, key: str, values: dict,
                    name: str | None = None) -> dict:
     """POST /agents/blueprints/{source}/copy with `values` set in the copy.
 
-    This is where a bundle's `values` went. A copy takes `overrides.values`, each
-    of which must be one the blueprint declares (an undeclared key is a 400, unlike
-    a bundle, which stored it and ignored it). `tva` fits nothing, so any of its
+    A copy takes `overrides.values`, each of which must be one the blueprint
+    declares (an undeclared key is a 400). `tva` fits nothing, so any of its
     values may be overridden. The copy lands in `project_id` under `key`; a key
     already in use there is a 409.
     """
@@ -599,6 +610,39 @@ def package_ready(package_id: str, timeout_s: int = 900) -> dict:
     return _wait_for(packages_url(package_id), "ready", "building", timeout_s)
 
 
+def ready_package(rec: dict, blueprint_id: str, name: str, save, log=print) -> dict:
+    """rec["package"] once ready, created (and saved) first if there is none. A failed
+    package never becomes ready, so it is deleted and built again, once."""
+    for attempt in range(2):
+        if not rec.get("package"):
+            rec["package"] = create_package(blueprint_id, name)["id"]
+            for kind in ("batch", "serving"):
+                rec.pop(kind, None)
+            save()
+            log(f"package {rec['package']} building (models resolved once) ...")
+        pkg = _wait_for(packages_url(rec["package"]), "ready", "building", 900, exit=False)
+        if pkg["status"] == "ready":
+            return pkg
+        if pkg["status"] != "failed" or attempt:
+            sys.exit(f"{rec['package']} is {pkg['status']}, not ready: {pkg.get('error')}")
+        log(f"{rec['package']} failed ({pkg.get('error')}): deleting it and building a new one")
+        request("DELETE", packages_url(rec["package"]), raw=True, allow_status=True)
+        rec.pop("package")
+        save()
+
+
+def list_all(url: str) -> list:
+    """Every item of a paginated list; the cursor is opaque and passed back as is."""
+    items, after = [], ""
+    sep = "&" if "?" in url else "?"
+    while True:
+        page = request("GET", f"{url}{sep}limit=1000{after}")
+        items += page.get("data", [])
+        if not page.get("has_more"):
+            return items
+        after = f"&after={page['next_cursor']}"
+
+
 def deploy(package_id: str, kind: str) -> dict:
     """Deploy a ready package as `batch` or `serving`; it starts `deploying`.
 
@@ -615,8 +659,7 @@ def open_session(deployment_id: str, video_file_id: str | None = None,
                  sop_file_id: str | None = None) -> dict:
     """A batch session over one video AND its SOP, or a serving session with neither.
 
-    Both inputs go in the same `connectors.source` list, exactly as a bundle run
-    took them, and MultiModalSource routes them by `format`: `mp4` reaches
+    Both inputs go in the same `connectors.source` list, and MultiModalSource routes them by `format`: `mp4` reaches
     `source.video`, `txt` reaches `source.text`. The order does not matter. Omit
     the text input and the session still starts, then the prompt generator waits
     on an instruction that never arrives.
@@ -651,10 +694,8 @@ def poll_session(session_id: str, timeout_s: int = 3600, interval_s: int = 20,
     Returns the final status (`completed`, `failed`, `cancelled`), or `timeout`.
 
     A session has no /logs, only /events: what the platform records about the
-    session (opened, dispatched, failed with a reason), not the model-load timings
-    and parser messages a bundle run's /logs carried. So the parser's warning that
-    generation ended inside the reasoning block is no longer visible here. A run
-    that hit it still ends `completed`, with `results: []` in its output: count
+    session (opened, dispatched, failed with a reason), not the parser's warning
+    that generation ended inside the reasoning block. A run that hit it still ends `completed`, with `results: []` in its output: count
     the verdicts (see empty_output()).
     """
     seen: set[str] = set()
@@ -725,7 +766,7 @@ def fetch_results(session_id: str, out_path: str) -> bytes | None:
 
 def cancel_session(session_id: str) -> None:
     """POST /cancel. Do NOT send DELETE expecting a no-op — it removes the session."""
-    request("POST", f"{sessions_url(session_id)}/cancel", body={}, allow_status=True)
+    request("POST", f"{sessions_url(session_id)}/cancel", body={}, allow_status=True, idempotent=True)
 
 
 def end_session(session_id: str) -> None:
@@ -740,5 +781,6 @@ def end_deployment(deployment_id: str) -> None:
     """Stop a deployment that is still up, then delete it."""
     status, dpl = request("GET", deployments_url(deployment_id), allow_status=True)
     if status == 200 and dpl.get("status") not in ("stopped", "failed"):
-        request("POST", f"{deployments_url(deployment_id)}/stop", body={}, allow_status=True)
+        request("POST", f"{deployments_url(deployment_id)}/stop", body={}, allow_status=True,
+                idempotent=True)
     request("DELETE", deployments_url(deployment_id), raw=True, allow_status=True)

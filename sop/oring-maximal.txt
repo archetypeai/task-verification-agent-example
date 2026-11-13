@@ -1,3 +1,0 @@
-Step 1: You are observing a worker doing an assembly job. Available components: a small black rubber O-ring, a blue cap, a black manifold, and a wrench. Focus on what the worker has in their hands. The worker picks up the black O-ring as a separate loose part and attaches, places, or aligns it onto the blue cap.
-Step 2: Focus on what the worker has in their hands. The worker attaches, inserts, or aligns the blue cap into a port of the black manifold by hand.
-Step 3: Focus on what the worker has in their hands. The worker uses the wrench to tighten the blue cap on the black manifold.

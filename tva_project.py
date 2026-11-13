@@ -13,19 +13,18 @@ sweep for serving — are opened by the caller and recorded here with
 record_session() BEFORE anything waits on them, so cleanup.py and
 `sweep.py --collect` find a session whose client died.
 
-WHY A COPY PER SETTING. A bundle carried `values`; a package, a deployment and a
-batch session carry none (a batch session refuses them with a 422). The one place
+WHY A COPY PER SETTING. A package, a deployment and a batch session carry no values (a batch session refuses them with a 422). The one place
 left to set them is the blueprint, and a copy into a project takes
 `overrides.values`. So each setting is its own copy, named after its values, and
 it is reused by every later run at that setting, from any script. A plain copy
-with no overrides would run at the blueprint's own defaults, which on dev
-(2026-11) include max_new_tokens 8192 — the budget this example measured looping
+with no overrides would run at the blueprint's own defaults, which include
+max_new_tokens 8192 — the budget this example measured looping
 inside <think> and returning results:[] on a hard clip (see
 tva_api.DEFAULT_MAX_NEW_TOKENS).
 
 State goes to state/lifecycle.json, for one deployment of the platform: pointing
 .env at another one stops with a message to move state/ aside. A lock serialises
-the scripts this example lets you run at once (iterate_sop.py), so two of them
+scripts run at once, so two of them
 never build two packages for one setting.
 """
 from __future__ import annotations
@@ -92,7 +91,7 @@ def setting_key(values: dict, source: str = "tva") -> str:
 
 def _project(state: dict) -> str:
     if "project" not in state:
-        found = [p for p in api.request("GET", f"{api.api_base()}/projects?limit=1000")["data"]
+        found = [p for p in api.list_all(f"{api.api_base()}/projects")
                  if p["name"] == PROJECT]
         state["project"] = found[0]["id"] if found else api.request(
             "POST", f"{api.api_base()}/projects",
@@ -119,7 +118,9 @@ def agent(values: dict, kind: str, source: str = "tva") -> dict:
         rec = state["settings"].setdefault(key, {"source": source, "values": values})
 
         if not rec.get("blueprint") or not _alive(f"{api.agents_base()}/blueprints/{rec['blueprint']}"):
-            found = api.request("GET", f"{api.agents_base()}/blueprints?project_id={project}&key={key}")["data"]
+            found = [b for b in api.request(
+                "GET", f"{api.agents_base()}/blueprints?project_id={project}&key={key}")["data"]
+                if b.get("blueprint_key") == key]
             if found:
                 rec["blueprint"] = found[0]["id"]
                 log(f"reusing {key} ({rec['blueprint']})")
@@ -130,16 +131,9 @@ def agent(values: dict, kind: str, source: str = "tva") -> dict:
             rec.pop("package", None)
             save_state(state)
 
-        pkg = _alive(api.packages_url(rec["package"])) if rec.get("package") else None
-        if not pkg or pkg["status"] not in ("ready", "building"):
-            pkg = api.create_package(rec["blueprint"], f"TVA {key}")
-            rec["package"] = pkg["id"]
-            for k in ("batch", "serving"):
-                rec.pop(k, None)
-            save_state(state)
-            log(f"package {pkg['id']} building (models resolved once) ...")
-        if pkg["status"] != "ready":
-            api.package_ready(rec["package"])
+        if rec.get("package") and not _alive(api.packages_url(rec["package"])):
+            rec.pop("package")                     # deleted by cleanup.py
+        api.ready_package(rec, rec["blueprint"], f"TVA {key}", lambda: save_state(state), log)
 
         dpl = _alive(api.deployments_url(rec[kind])) if rec.get(kind) else None
         if not dpl or dpl["status"] not in ("ready", "deploying"):

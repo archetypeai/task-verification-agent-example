@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the Task Verification Agent on one assembly video, end to end.
 
-Single file, stdlib only apart from tva_api.py next to it — no pip install, no
-virtualenv, no GPU, no atai_core checkout.
+Stdlib only apart from tva_api.py and tva_project.py next to it: no pip install,
+no virtualenv, no GPU.
 
     ATAI_API_KEY=<API key>
     ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
@@ -10,56 +10,30 @@ virtualenv, no GPU, no atai_core checkout.
     python3 run_tva_example.py                      # the default clip
     python3 run_tva_example.py --video data/clips/1_pass_2_pass_3_fail_A.mp4
     python3 run_tva_example.py --dry-run            # print the payloads, call nothing
-    python3 run_tva_example.py --show out.json     # re-read an output, no API calls
+    python3 run_tva_example.py --show out.json      # re-read an output, no API calls
 
-    # reproduce the empty-output failure — the one worth recognising
-    python3 run_tva_example.py --repro-empty --offline   # free, no API key
-    python3 run_tva_example.py --repro-empty             # live, ~13 min
+A run is: the project's copy of `tva` at this run's max_frames, size and
+max_new_tokens (made once per setting, see tva_project.py), its package and batch
+deployment (also once per setting), and one batch session over the video and the
+SOP. About 10-15 minutes, most of it loading the model on every run.
+state/lifecycle.json keeps the ids; `python3 cleanup.py --yes` deletes them.
 
-Budget 20-30 MINUTES, not the ~13 of job time. The job itself is 754-1614 s once it
-starts — ~7 min of model download and load on EVERY run, nothing cached between
-runs, then generation — and THE QUEUE IS ON TOP OF THAT. Dev has one GPU shared
-across orgs; waits from 12 s to 796 s have been observed, and one 17-minute job took
-41 minutes of wall clock (measured with bundles). Ten silent minutes means queued,
-not hung: the session stays `pending` until it is dispatched.
+TVA takes the reference procedure AT RUNTIME: a run sends two source inputs, the
+video (`format: mp4`) and the SOP as a .txt file (`format: txt`). The platform
+routes them by `format`, not by position.
 
-On the Agent Lifecycle 2.0 a run is: the project's copy of `tva` at this run's
-max_frames, size and max_new_tokens (made once per setting, see tva_project.py),
-its package and batch deployment (also once per setting), and one batch session
-over the video and the SOP. state/lifecycle.json keeps the ids.
-
-WHAT IS DIFFERENT FROM THE MGA EXAMPLE, and it is the whole point:
-
-  TVA takes the reference procedure AT RUNTIME. The `tva` blueprint wires
-  `source.text -> prepare.in` (PrepareSOPNode) alongside `source.video`, so a
-  run sends TWO source inputs: the video and the SOP as a .txt file. MGA's
-  blueprint sets `text_extensions: []` and hardcodes its instruction, which is
-  why that example has no prompt to pass and this one does.
-
-  MultiModalSource routes the two inputs by their `format` field, not by
-  position: `mp4` reaches source.video, `txt` reaches source.text.
-
-THINGS THAT WILL BITE YOU (all verified on dev, 2026-08-11)
+THINGS THAT WILL BITE YOU
 
   1. `connectors.source[].id` wants the file BASENAME, which is what the files API
-     returns as `file_id` — not the `fil_...` `file_uid` in the same response.
-
+     returns as `file_id`, not the `fil_...` `file_uid` in the same response.
   2. A package, a deployment and a batch session take NO values. They are set on
      the blueprint copy (`overrides.values`), one copy per setting.
-
-  3. A session has no /logs, only /events. The parser's "generation ended inside
-     the reasoning block" warning is not visible any more: a session that hit it
-     ends `completed` with `results: []`. Count the verdicts.
-
-  4. A session's `status` is the run's: poll it, not a log stream.
-
-  5. There is NO `prompt` value on this blueprint. The system message lives
-     inside TaskVerificationPromptGeneratorNode. Your SOP is the only thing you
-     control, so the SOP wording IS the prompt — see the README's Stage 3.
-
-  6. These clips have NO AUDIO TRACK, and the blueprint runs
-     audio_reader -> whisper -> prompt.audio regardless. It does not fail; see
-     the README on what whisper contributes here (nothing).
+  3. A session that ends `completed` can hold no verdicts (`results: []`). The
+     script counts them and exits non-zero when there are none.
+  4. There is NO `prompt` value on this blueprint: your SOP is the only thing you
+     control, so the SOP wording is the prompt.
+  5. These clips have no audio track. The blueprint transcribes audio anyway; it
+     does not fail, and contributes nothing here.
 """
 from __future__ import annotations
 
@@ -79,70 +53,14 @@ from background import add_background_flag, maybe_detach
 CLIP_DIR = "data/clips"
 VIDEO_PATH = "data/clips/1_pass_2_pass_3_pass_A.mp4"
 
-# NORMALLY you target the blueprint KEY, not an id: a key resolves to whatever is
-# canonical and active, and the MGA example had a pinned id stop resolving
-# mid-session when the blueprint was republished under it.
-#
-# THIS FILE PINS AN ID ANYWAY, and the reason is the mirror image of that advice.
-# `tva` was republished on 2026-08-11 at 22:01:18 with its sink format changed to
-# `json/per-request`, which has no registered connector — so the CANONICAL, ACTIVE
-# blueprint cannot produce output at all. It loads both models for ~7 minutes and
-# then dies at graph instantiation (see tva_api.check_sink). The superseded
-# blueprint below is byte-identical apart from that one string, and it works.
-#
-# So: neither "use the key" nor "pin an id" is safe on its own. What is safe is
-# checking the blueprint document before spending GPU, which the preflight does.
-#
-# TO FLIP BACK once the sink is fixed upstream: set BLUEPRINT_DEFAULT = "tva".
-# The preflight will stop warning on its own — it reads the document, not a
-# hardcoded list of blueprint ids.
-# FIXED 2026-08-12: the canonical blueprint's sink was un-instantiable for ~18
-# hours and now works, so this targets the KEY again — which is the right default
-# and the advice the MGA example gives. The superseded id is kept only to reproduce
-# the runs in reference/, which were made against it.
+# Copy from the blueprint KEY, which resolves to the current version of `tva`.
 BLUEPRINT_DEFAULT = "tva"
-BLUEPRINT_HISTORIC_WORKING = "blp_6dp7cye17f8qct7a9jbzx6yhfy"   # what reference/ used
 
-# The SOP lives in a TEXT FILE, not in this script, because that is what it is on
-# the wire: the runner writes it to a .txt, uploads it, and passes it as a second
-# source input. Editing sop/oring.txt is the intended way to change the procedure
-# — no Python involved — and --sop points at a different file.
-#
-# ONE STEP PER LINE. PrepareSOPNode "accumulates the SOP step lines into a single
-# prepared-instruction string", so the LINE BREAKS are the step boundaries and
-# nothing else is. A wrapped line becomes two steps; a blank line is dropped.
-#
-# Two deliberate choices in the shipped wording, both documented in the README:
-#
-#   * EXPLICIT "Step N:" PREFIXES. The line breaks alone are enough for the node
-#     to segment on, so these are redundant to the parser — they are there for
-#     the MODEL, to tie each verdict to a numbered step rather than to line
-#     order. The parser's own `step` field is positional and 0-based regardless
-#     (see STEP_BASE), so the prefixes cannot renumber the output.
-#   * NAMED COLOURS. The bench holds a blue anodized cap and a black manifold,
-#     with other blue and black fittings laid out beside them, so "the cap" is
-#     genuinely ambiguous on a 224x224 frame. Worth knowing: the model already
-#     volunteered "the blue cap" in its reasons WITHOUT being told the colour, so
-#     this is disambiguation insurance rather than a fix for a known miss.
-#
-# The wording stays behavioural ("ensuring it is properly seated") and does not
-# name a torque figure, because nothing in a 30-second handheld video can
-# evidence a number — see the README on why step 3 is the one that misreads.
-# THE BASELINE, as of 2026-08-13: sop/oring-numbered.txt.
-#
-# Not sop/oring.txt (the design doc's bare format), even though that is the format
-# the doc shows. Every committed result in this repo was produced with the numbered
-# SOP — reference/sweep/ (12 clips), eval_paired/ (12 clips, stem-matched), and the
-# replication grid — so making it the default is what keeps a fresh `python3
-# run_tva_example.py` comparable to the numbers in the README instead of silently
-# testing a different prompt.
-#
-# The two formats were compared directly and the difference did not survive
-# scrutiny: eight SOP variants across five mechanisms produced identical verdicts on
-# the two hardest clips. sop/oring.txt is kept for the format comparison, not
-# because either format is better.
+# The SOP lives in a text file, one step per line: the line breaks are the step
+# boundaries. "Step N:" prefixes tie each verdict to a numbered step for the model;
+# the parser's own `step` field is positional and 0-based regardless (STEP_BASE).
+# Named colours ("the blue cap") disambiguate parts on a 224x224 frame.
 DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
-
 
 def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
     """Read SOP steps from a text file, one per line, blanks and # comments out."""
@@ -154,52 +72,8 @@ def load_sop(path: str = DEFAULT_SOP_PATH) -> list[str]:
         sys.exit(f"{path} has no step lines")
     return steps
 
-# Statuses the TaskVerificationResultsParserNode emits, per the design doc.
+# The statuses the results parser emits.
 STATUSES = ("PASSED", "FAILED", "MISSING")
-
-# --repro-empty: a run that reports success and returns no verdicts at all.
-# A `completed` session, no error, an empty `results` list.
-#
-# WHAT THIS REPRODUCES, and what it does not. Raising the budget is NOT a general
-# fix — two clips returned empty at the ceiling in the 12-clip sweep — but a low
-# budget is what reproduces it ON DEMAND, and a reproduction has to be reliable.
-#
-# The root pathology is REPETITION: the model emits the verdict block over and
-# over. Whether that surfaces as nothing or as sevenfold duplication depends on
-# which side of `</think>` the budget runs out on:
-#
-#   1_fail_2_pass_3_fail_A at 8192  -> looped inside <think>, never closed:
-#                                      "dropping 37 rehearsed row(s)", 0 rows out
-#   1_fail_2_pass_3_fail_A at 5760  -> closed <think>, then looped in the answer:
-#                                      21 rows, all CORRECT, 7 blocks of 3
-#   1_pass_2_pass_3_fail_A at 2048  -> runs out inside <think>: 0 rows  <- this mode
-#
-# So do not read a small budget as "the cause". It is the reliable trigger for the
-# empty presentation of a pathology that also occurs at the ceiling.
-REPRO = {
-    "video": "data/clips/1_pass_2_pass_3_fail_A.mp4",
-    "max_frames": 64,
-    "size": 224,
-    # 2048 rather than the ceiling, and this was learned the hard way. An earlier
-    # version used the computed maximum on 1_fail_2_pass_3_fail_A, reasoning that
-    # reproducing the failure at the ceiling was the honest configuration. It does
-    # not reproduce: that clip at 5760 returns 21 rows of CORRECT verdicts. The
-    # underlying pathology is repetition — the model emits the verdict block over
-    # and over — and whether you get nothing or sevenfold depends on which side of
-    # `</think>` the budget runs out on. 2048 lands inside the reasoning block
-    # reliably on this clip, which is what a reproduction needs to do.
-    "max_new_tokens": 2048,
-}
-# What that clip produced in the sweep, committed so the failure is inspectable
-# offline with no API key.
-REPRO_REFERENCE = "reference/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json"
-REPRO_EXPECTED_MD5 = "1b56135df5d1476c625e6aedfd18b91b"
-
-# The avoidable variant, kept only so the contrast is available:
-#   python3 run_tva_example.py --repro-empty --max-new-tokens 2048
-# on 1_pass_2_pass_3_fail_A. That one IS fixed by raising the budget; the default
-# above is not, which is the point.
-
 
 # Extensions a clip may carry. `ls data/clips` shows names WITH the extension, so
 # pasting one is the natural thing to do — accept both that and the bare stem
@@ -230,7 +104,7 @@ def sop_text(steps: list[str]) -> str:
 def upload_sop(sop_path: str, steps: list[str]) -> str:
     """Upload the SOP and return its file_id (which is its basename).
 
-    Normally this uploads sop/oring.txt ITSELF — no generated copy, so the file
+    Normally this uploads sop/oring-numbered.txt ITSELF — no generated copy, so the file
     on disk, the file on the platform and the text the model sees are the same
     bytes under the same name.
 
@@ -249,7 +123,7 @@ def upload_sop(sop_path: str, steps: list[str]) -> str:
 def sop_upload_name(sop_path: str = DEFAULT_SOP_PATH) -> str:
     """The name the SOP is uploaded under — just its basename.
 
-    So sop/oring.txt arrives as `oring.txt` and the local file and the platform
+    So sop/oring-numbered.txt arrives as `oring-numbered.txt` and the local file and the platform
     file have the same name. Earlier revisions of this script named the upload
     after the CLIP, which wrongly implied a per-clip procedure (all twelve clips
     share one SOP), and then after a content hash, which was unreadable.
@@ -282,7 +156,7 @@ def pair_names(clip: str, sop_path: str, pair_sop: bool,
     """
     tail = f"-{suffix}" if suffix else ""
     if pair_sop:
-        # Clip stem only: the platform team's literal recommendation, plus the
+        # Clip stem only, plus the
         # uniqueness suffix — which preserves stem matching, the point of the flag.
         return f"{clip}{tail}.mp4", f"{clip}{tail}.txt"
     # Default: stems match AND record which SOP produced the run.
@@ -394,83 +268,13 @@ STEP_BASE = 0
 def _step_no(row: dict) -> int | None:
     """The parser's `step` field, normalised to 1-based to match the SOP.
 
-    The design doc specifies `step: <int>` without saying where it starts. It is
-    0-BASED, verified on a real run: a 3-step SOP comes back as steps 0, 1, 2.
+    It is 0-BASED, verified on a real run: a 3-step SOP comes back as steps 0, 1, 2.
     That matters because the SOP a human writes is 1-based, so a scorer that
     joins them naively is off by one — and an off-by-one here produces plausible
     wrong alignments (step 2's verdict filed under step 1) rather than an error.
     """
     s = row.get("step")
     return None if s is None else int(s) + (1 - STEP_BASE)
-
-
-def repro_symptoms(payload: bytes | None) -> list[tuple[str, bool, str]]:
-    """(description, reproduced, detail) for each symptom of the empty failure."""
-    records = [json.loads(l) for l in (payload or b"").decode(errors="replace").splitlines()
-               if l.strip()]
-    rows = [r for rec in records for r in (rec.get("results") or [])]
-    return [
-        ("a record IS returned (this is not a missing file)",
-         len(records) == 1, f"{len(records)} record(s)"),
-        ("it contains NO verdicts",
-         len(rows) == 0, f"{len(rows)} verdict(s)"),
-        ("the output is tiny (~44 bytes)",
-         payload is not None and len(payload) < 100, f"{len(payload or b'')} bytes"),
-    ]
-
-
-def repro_report(payload: bytes | None, verdict: str, session_id: str) -> None:
-    """Print CONFIRMED / NOT REPRODUCED per symptom, and what it means."""
-    print("\n" + "=" * 72)
-    print("EMPTY-OUTPUT REPRODUCTION")
-    print("=" * 72)
-    results = repro_symptoms(payload)
-    for desc, ok, detail in results:
-        print(f"  {'CONFIRMED    ' if ok else 'NOT REPRODUCED'}  {desc}\n"
-              f"                  observed: {detail}")
-    # The session's status matters as much as the bytes: the whole point is that
-    # the run does not report failure.
-    print(f"\n  session status: {verdict}")
-    if verdict == "completed":
-        print("    -> reported as a clean completion. A session has no /logs, so the\n"
-              "       parser's warning that generation ended inside the reasoning\n"
-              "       block is not visible: the empty `results` list is the only\n"
-              "       diagnostic. (It is also what the parser matching nothing at\n"
-              "       all looks like; the bundle-era /logs told the two apart.)")
-
-    if all(ok for _, ok, _ in results):
-        digest = hashlib.md5(payload).hexdigest()
-        print(f"\n  REPRODUCED. md5 {digest}")
-        print(f"    {'matches' if digest == REPRO_EXPECTED_MD5 else 'differs from'} "
-              f"the committed reference ({REPRO_EXPECTED_MD5})")
-        print("\n  Why it matters: nothing in the HTTP responses, the job status or\n"
-              "  the exit code distinguishes this from success. COUNT THE VERDICTS.\n"
-              "  And note which clips it strikes — the ones containing a defect need\n"
-              "  more reasoning than the clean ones, so a verification agent fails\n"
-              "  precisely on the inputs it was deployed to catch.")
-    else:
-        print("\n  NOT REPRODUCED — the run returned verdicts.\n"
-              "  The budget needed depends on the clip and on how much the model\n"
-              "  reasons, so this is not perfectly deterministic. Try\n"
-              "  --repro-empty on a clip with more than one skipped step, or lower\n"
-              "  --max-new-tokens further.")
-    print(f"\n  session: {api.sessions_url(session_id)}  (and /events)")
-    print("=" * 72)
-
-
-def repro_analyse(path: str) -> None:
-    """Offline: report the same symptoms from the committed output. No API key."""
-    if not os.path.exists(path):
-        sys.exit(f"no committed reference at {path}")
-    payload = open(path, "rb").read()
-    print(f"analysing the committed output — no API key, no GPU\n  {path}\n")
-    print(f"  raw bytes: {payload.decode(errors='replace')}\n")
-    for desc, ok, detail in repro_symptoms(payload):
-        print(f"  {'CONFIRMED    ' if ok else 'NOT REPRODUCED'}  {desc}\n"
-              f"                  observed: {detail}")
-    print(f"\n  md5 {hashlib.md5(payload).hexdigest()}")
-    print("\n  This is what a `completed` session with no error can look like.\n"
-          "  Reproduce it live with:  python3 run_tva_example.py --repro-empty")
 
 
 def main() -> None:
@@ -497,23 +301,18 @@ def main() -> None:
     ap.add_argument("--max-new-tokens", type=int, default=None,
                     help="output budget. The prompt (video frames + SOP) and the "
                          "generated tokens SHARE the context window, so this is "
-                         "capped by max_seq_len — which is NOT exposed by the API "
-                         "and has been raised twice during this work (8192, then "
-                         ">9304, then >10568). BIGGER IS NOT BETTER: the failure "
+                         "capped by the model's context length. BIGGER IS NOT BETTER: the failure "
                          "mode is repetition, and on the double-omission clip 8192 "
                          "returned 0 rows where 5760 returned correct verdicts. "
                          f"(default: {api.DEFAULT_MAX_NEW_TOKENS}, or the window's "
                          "ceiling if that is lower)")
     ap.add_argument("--pair-sop", action="store_true",
-                    help="upload the SOP as <video-stem>.txt — the CLIP's stem only, "
-                         "which is the platform team's literal recommendation. Not "
+                    help="upload the SOP as <video-stem>.txt, the CLIP's stem only. Not "
                          "the default, because one name per clip means every SOP "
                          "variant overwrites the last and a run in flight can be "
                          "changed under it. The default already matches stems AND "
                          "names the SOP (<clip>-<sop>.txt), so use this flag only to "
-                         "reproduce the plain convention. Either way a 1:1 run works: "
-                         "the unpaired 12-clip sweep in reference/sweep/ returned "
-                         "verdicts for 10 of 12 clips with mismatched stems.")
+                         "use the plain convention.")
     ap.add_argument("--sop", metavar="FILE", default=DEFAULT_SOP_PATH,
                     help=f"text file of SOP steps, one per line "
                          f"(default: {DEFAULT_SOP_PATH}). The SOP is the ONLY "
@@ -526,17 +325,6 @@ def main() -> None:
                     help="pretty-print an output file and stop — no API calls")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the exact payloads and stop — no API calls")
-    ap.add_argument("--repro-empty", action="store_true",
-                    help="reproduce the EMPTY-OUTPUT failure: a run that reports "
-                         "completed with no error and returns no verdicts. "
-                         "Overrides --video/--max-frames/--size/--max-new-tokens "
-                         "with the configuration known to trigger it, then reports "
-                         "each symptom as CONFIRMED or NOT REPRODUCED. ~13 min of "
-                         "GPU. Add --offline to inspect the committed output "
-                         "instead, for free.")
-    ap.add_argument("--offline", action="store_true",
-                    help="with --repro-empty, analyse the committed reference "
-                         "output instead of running the agent. No API key needed.")
     ap.add_argument("--force", action="store_true",
                     help="run even if the blueprint's sink cannot be "
                          "instantiated (see check_sink) — normally that is a "
@@ -548,42 +336,6 @@ def main() -> None:
     if args.show:
         show(args.show)
         return
-
-    if args.repro_empty:
-        if args.offline:
-            repro_analyse(REPRO_REFERENCE)
-            return
-        print(__doc__.split("REPRODUCING")[0].strip().splitlines()[0])
-        args.video = REPRO["video"]
-        args.max_frames = REPRO["max_frames"]
-        args.size = REPRO["size"]
-        # The repro's own budget wins unless the caller set one explicitly, so
-        # --repro-empty is self-contained and --max-new-tokens still overrides it.
-        if args.max_new_tokens is None:
-            args.max_new_tokens = REPRO["max_new_tokens"] or \
-                api.max_usable_new_tokens(args.max_frames, args.size,
-                                          sop=args.sop)
-        ceiling = api.max_usable_new_tokens(args.max_frames, args.size, sop=args.sop)
-        at_ceiling = args.max_new_tokens >= ceiling
-        print(f"\nREPRODUCING THE EMPTY-OUTPUT FAILURE\n"
-              f"  clip            {os.path.basename(REPRO['video'])}\n"
-              f"                  step 3 skipped — the wrench never appears\n"
-              f"  max_new_tokens  {args.max_new_tokens}"
-              f"{'   <-- the MAXIMUM the context window allows' if at_ceiling else '   (below the ceiling of %d)' % ceiling}\n"
-              f"  max_frames      {args.max_frames}, size {args.size}\n"
-              f"  SOP             {args.sop or DEFAULT_SOP_PATH} (unmodified)\n\n"
-              f"  Expect: a completed session, NO error, and results: [] — ~44 bytes.\n")
-        print(f"  A low budget is the RELIABLE TRIGGER, not the root cause. The\n"
-              f"  underlying pathology is repetition: the model emits the verdict\n"
-              f"  block over and over, and where the budget runs out decides what\n"
-              f"  you see. Measured on 1_fail_2_pass_3_fail_A:\n"
-              f"      at 8192  looped inside <think>, never closed -> 0 rows\n"
-              f"               (log: 'dropping 37 rehearsed row(s)')\n"
-              f"      at 5760  closed <think>, looped in the answer -> 21 rows,\n"
-              f"               7 identical blocks of 3, all verdicts CORRECT\n"
-              f"  So raising the budget is not a fix — it changes the presentation.\n"
-              f"  The ceiling here is {ceiling}; this run uses "
-              f"{args.max_new_tokens}.\n")
 
     steps = load_sop(args.sop or DEFAULT_SOP_PATH)
 
@@ -647,7 +399,7 @@ def main() -> None:
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, "
           f"active={bp['is_active']}, canonical={bp.get('is_canonical')})")
     if not bp["is_active"]:
-        print("  NOTE: this blueprint is superseded — results cannot ship.")
+        print("  NOTE: this blueprint is not the current version.")
     inert = api.inert_values(doc, values)
     if inert:
         print(f"  WARNING: {inert} is not wired on this blueprint and will be "
@@ -680,13 +432,9 @@ def main() -> None:
     v_name, s_name = pair_names(clip, args.sop, args.pair_sop,
                                 os.path.basename(args.video), suffix=suffix)
     if args.pair_sop:
-        # The platform team's literal recommendation: name the SOP after the CLIP.
-        # Kept so that exact convention can still be reproduced, but not the default:
-        # one name per clip means every SOP variant overwrites the last, and content
-        # is resolved at RUN time, so a second run can change a first run's SOP
-        # mid-flight. That cost two attributable results here — 7 hours after a
-        # 12-clip sweep, the platform could no longer say what two of those runs had
-        # been given (see the README).
+        # The SOP named after the CLIP. Not the default: one name per clip means every
+        # SOP variant overwrites the last, and content is resolved at RUN time, so a
+        # second run can change a first run's SOP mid-flight.
         video_id = api.upload_file(args.video)
         paired = os.path.join("sop", "paired", f"{clip}.txt")
         if os.path.exists(paired) and open(paired).read() == sop_text(steps):
@@ -731,14 +479,11 @@ def main() -> None:
         print(f"  saved {out_path} ({len(payload)} bytes, "
               f"md5 {hashlib.md5(payload).hexdigest()})")
         show(out_path, video=args.video)
-    if args.repro_empty:
-        repro_report(payload, verdict, session_id)
-        return
     if verdict != "completed":
         sys.exit(f"session {verdict} — {api.sessions_url(session_id)}/events")
     if api.empty_output(payload):
         sys.exit("session completed with results: [] — no verdicts (see the README "
-                 "on the token budget)")
+                 "on max_new_tokens)")
 
 
 if __name__ == "__main__":
