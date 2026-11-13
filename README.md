@@ -227,5 +227,11 @@ endpoint: to run against another, move it aside.
 | `tva_api.py`, `tva_project.py` | The API client and the project, copy, package and deployment bookkeeping. |
 | `background.py` | `--background` for the long-running scripts. |
 | `sop/oring-numbered.txt` | The SOP. `sop/paired/` holds a copy per clip, for `--pair-sop`. |
-| `data/clips/` | The 12 recordings, made for this example. |
+| `data/clips/` | The 12 recordings, made by Archetype AI for this example. |
 | `reference/` | The verified batch and serving outputs. |
+| `LICENSE` | Apache License 2.0, for the code and the recordings. |
+
+## Licence
+
+The code and the 12 recordings in `data/clips/` are under the [Apache License
+2.0](LICENSE). Archetype AI made the recordings for this example.
