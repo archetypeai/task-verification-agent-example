@@ -36,6 +36,27 @@ The batch outputs are from 2026-10-26; rerun on 2026-11-12 on the new lifecycle,
 same clip returned the same verdicts. The serving outputs are from 2026-11-12. Batch
 and serving agree on 34 of the 36 steps.
 
+Every clip, every step. ✗ marks a wrong verdict; where batch and serving differ, the
+cell shows `batch / serving`:
+
+| Clip | Step 1 (o-ring) | Step 2 (thread) | Step 3 (wrench) | TVA step 1 | TVA step 2 | TVA step 3 |
+|---|---|---|---|---|---|---|
+| `1_fail_2_pass_3_fail_A` | **skipped** | done | **skipped** | PASSED ✗ | PASSED | MISSING |
+| `1_fail_2_pass_3_pass_A` | **skipped** | done | done | MISSING / PASSED ✗ | PASSED | PASSED |
+| `1_fail_2_pass_3_pass_B` | **skipped** | done | done | PASSED ✗ | PASSED | PASSED |
+| `1_fail_2_pass_3_pass_C` | **skipped** | done | done | PASSED ✗ | PASSED | PASSED |
+| `1_fail_2_pass_3_pass_E` | **skipped** | done | done | PASSED ✗ | PASSED | MISSING ✗ / PASSED |
+| `1_fail_2_pass_3_pass_F` | **skipped** | done | done | PASSED ✗ | PASSED | FAILED ✗ / MISSING ✗ |
+| `1_pass_2_pass_3_fail_A` | done | done | **skipped** | PASSED | PASSED | MISSING |
+| `1_pass_2_pass_3_fail_B` | done | done | **skipped** | PASSED | PASSED | MISSING |
+| `1_pass_2_pass_3_fail_C` | done | done | **skipped** | PASSED | PASSED | MISSING |
+| `1_pass_2_pass_3_pass_A` | done | done | done | PASSED | PASSED | FAILED ✗ |
+| `1_pass_2_pass_3_pass_B` | done | done | done | PASSED | PASSED | PASSED |
+| `1_pass_2_pass_3_pass_C` | done | done | done | PASSED | PASSED | PASSED |
+
+Step 2 is done in every clip, so its 12 of 12 says nothing about whether TVA would
+catch it skipped.
+
 **What this means in practice:** TVA reliably catches a skipped step that leaves
 something visibly absent: the wrench never enters the frame. It mostly **misses a
 skipped step whose parts are on screen anyway**: the o-ring sits on the bench in every
