@@ -26,3 +26,10 @@ __pycache__/
 
 .DS_Store
 .claude/settings.local.json
+
+# Task Verification App (app/): uploads and saved verdicts
+app/uploads/
+app/runs/
+
+# Example videos: downloaded by examples/*/download.sh, never committed
+examples/*/video/

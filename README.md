@@ -84,7 +84,9 @@ python3 run_tva_example.py
 It uploads the default clip and the SOP, makes the agent (a copy of `tva` with the
 values set, its package and a batch deployment), opens a session, prints the
 session's events while it runs, then downloads the verdicts and prints them next to
-the ground truth:
+the ground truth. Expect about 10 minutes, most of it the session downloading and loading
+the model weights ([why](#downloading-the-model-weights-takes-time)); the 30 s clip itself
+takes about 1.5 minutes.
 
 ```
 step 1: expected PASS  got PASSED   [OK  ]
@@ -171,6 +173,22 @@ One JSON document per run:
 - **A `completed` session can hold no verdicts** (`results: []`). The scripts count
   them and exit non-zero when there are none.
 
+## Downloading the model weights takes time
+
+Nothing is cached between runs: every batch session and every new serving deployment
+downloads TVA's model weights (mainly newton-fusion) and loads them before it can answer.
+Measured in this repo:
+
+| | Wait before the first answer |
+|---|---|
+| Batch, every clip | ~7–12 min: newton-fusion took ~5 min to download and 2–6 min to load, on each run |
+| Serving, every start | 710 s on 2026-11-12 and ~11 min on 2026-11-18, all of it while the deployment reports `deploying` (a GPU, then the download and load, with no progress reported); the session then opens and runs within seconds. The app's [start](app/README.md#starting-the-agent-takes-1020-minutes-mostly-downloading-model-weights) budgets 10–20 min |
+
+Once loaded, a serving session answers in seconds (~3 s per 30 s clip, ~5 s per 20 s
+chunk). So batch costs the download per clip, and serving costs it once per start. Keep a
+serving session up for a batch of videos rather than starting it per video. Stopping it
+frees the GPU, but the next start downloads everything again.
+
 ## Serving
 
 A batch session loads the model for every clip. A serving deployment loads it once,
@@ -192,6 +210,35 @@ same. `--keep` leaves both up for `--session ses_…`.
 - A session with no query for 30 minutes is closed.
 - `--chunk` and `merge_chunks.py` split a clip into shorter pieces and merge the
   verdicts per step. Exploratory: on these clips it did not help on the o-ring step.
+
+## Web app
+
+`app/` is a local web UI over TVA in serving, for any video and any SOP, built with the
+Archetype AI Design System (SvelteKit). See [`app/README.md`](app/README.md).
+
+```sh
+cd app && npm install && npm run build
+python3 server/server.py       # http://127.0.0.1:8765; needs ffmpeg
+```
+
+Use the key from `.env` or paste one in the top bar (the endpoint is there too, to
+override), and start the agent. Starting takes **10–20 minutes**, mostly downloading the
+model weights, which happens again on every start
+([above](#downloading-the-model-weights-takes-time)).
+Then drop a video, type or load an SOP (`.txt`/`.md`), and
+verify: a few seconds per video, or **Long video** mode for anything past a minute or two.
+
+A 9-minute example to try that on, with its SOP and a download script (the video is not
+committed): [`examples/gel-electrophoresis/`](examples/gel-electrophoresis/README.md).
+
+![The app, set up for the 9-minute gel example: video, SOP, and Long video with one step per query](app/screenshots/setup.png)
+
+The results of that example with one step per query. The grid shows what each 20-second
+chunk said about each step. The outlined cells are the run of chunks that sets the step's
+time. A step passing in most chunks is the model passing whatever is in view, which is why
+every verdict needs a human check:
+
+![Verdicts for the gel example: the steps × chunks grid, then each step with its time, agreement count and reason](app/screenshots/results.png)
 
 ## Ground truth
 
@@ -229,9 +276,16 @@ endpoint: to run against another, move it aside.
 | `sop/oring-numbered.txt` | The SOP. `sop/paired/` holds a copy per clip, for `--pair-sop`. |
 | `data/clips/` | The 12 recordings, made by Archetype AI for this example. |
 | `reference/` | The verified batch and serving outputs. |
+| `app/` | The web app: SvelteKit UI with the Archetype AI Design System, and `server/server.py`, the stdlib Python server over `tva_api`. See [`app/README.md`](app/README.md). |
+| `examples/gel-electrophoresis/` | A 9-minute video to try Long video mode on: its SOP, a download script, approximate step times and what the runs returned. The video is not committed. |
 | `LICENSE` | Apache License 2.0, for the code and the recordings. |
 
 ## Licence
 
 The code and the 12 recordings in `data/clips/` are under the [Apache License
 2.0](LICENSE). Archetype AI made the recordings for this example.
+
+Two exceptions. `app/CLAUDE.md` and `app/ds-manifest.json` are the Archetype AI Design
+System's own files, installed by its CLI, under the MIT licence. The gel electrophoresis
+video is not in this repo: `examples/gel-electrophoresis/download.sh` fetches it from
+Wikimedia Commons, where it is CC BY 3.0 (credit in its README).
