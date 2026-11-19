@@ -1,0 +1,19 @@
+{
+  "$schema": "https://shadcn-svelte.com/schema.json",
+  "tailwind": {
+    "css": "src/routes/layout.css",
+    "baseColor": "slate"
+  },
+  "aliases": {
+    "utils": "$lib/utils",
+    "ui": "$lib/components/ui",
+    "components": "$lib/components",
+    "hooks": "$lib/hooks",
+    "lib": "$lib"
+  },
+  "typescript": true,
+  "registries": {
+    "console": "https://design-system-console.archetypeai.workers.dev/r/{name}.json",
+    "labs": "https://design-system-labs.archetypeai.workers.dev/r/{name}.json"
+  }
+}

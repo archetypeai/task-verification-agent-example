@@ -1,0 +1,6 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@archetypeai/ds-lib-tokens/fonts.css';
+@import '@archetypeai/ds-lib-tokens/theme.css';
+@source '../../node_modules/@archetypeai/ds-ui-svelte-console/dist';
+@source '../../node_modules/@archetypeai/ds-ui-svelte-labs/dist';
