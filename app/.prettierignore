@@ -5,3 +5,6 @@ build
 dist
 node_modules
 package-lock.json
+
+# vendored Anatomy kit (scripts/card-model)
+scripts/card-model/kit/
