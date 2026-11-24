@@ -25,6 +25,6 @@ export default ts.config(
 		rules: { 'svelte/no-navigation-without-resolve': 'off' }
 	},
 	{
-		ignores: ['.svelte-kit/', 'build/', 'dist/', 'node_modules/']
+		ignores: ['.svelte-kit/', 'build/', 'dist/', 'node_modules/', 'scripts/card-model/kit/']
 	}
 );
